@@ -25,7 +25,7 @@ from typing import Type, Dict, Any, Optional
 
 # Core server and protocol handler imports
 from telnet_server.server import TelnetServer
-from telnet_server.protocol_handler import TelnetProtocolHandler
+from telnet_server.telnet_protocol_handlers import BaseProtocolHandler
 
 def setup_logging(verbosity: int = 1) -> None:
     """
@@ -56,7 +56,7 @@ def setup_logging(verbosity: int = 1) -> None:
         datefmt='%Y-%m-%d %H:%M:%S'
     )
 
-def load_handler_class(handler_path: str) -> Type[TelnetProtocolHandler]:
+def load_handler_class(handler_path: str) -> Type[BaseProtocolHandler]:
     """
     Dynamically load a Telnet protocol handler class from a string path.
     
@@ -83,7 +83,7 @@ def load_handler_class(handler_path: str) -> Type[TelnetProtocolHandler]:
         handler_class = getattr(module, class_name)
         
         # Verify it's a proper Telnet protocol handler
-        if not issubclass(handler_class, TelnetProtocolHandler):
+        if not issubclass(handler_class, BaseProtocolHandler):
             raise TypeError(f"{class_name} must be a subclass of TelnetProtocolHandler")
         
         return handler_class
@@ -109,7 +109,7 @@ def prepare_server_kwargs(config: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in config.items() if k not in standard_keys}
 
 async def run_server(
-    handler_class: Type[TelnetProtocolHandler], 
+    handler_class: Type[BaseProtocolHandler], 
     host: str, 
     port: int, 
     server_kwargs: Optional[Dict[str, Any]] = None

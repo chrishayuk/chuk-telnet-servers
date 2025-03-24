@@ -10,7 +10,7 @@ import signal
 from typing import Dict, Any, Optional, Set, List, Callable, Awaitable, Type
 
 # Import the protocol handler
-from telnet_server.protocol_handler import TelnetProtocolHandler
+from telnet_server.telnet_protocol_handlers import BaseProtocolHandler
 
 # Configure logging
 logger = logging.getLogger('telnet-server')
@@ -19,13 +19,13 @@ class TelnetServer:
     """Telnet server with connection handling capabilities"""
     
     def __init__(self, host: str = '0.0.0.0', port: int = 8023, 
-                 handler_class: Type[TelnetProtocolHandler] = None):
+                 handler_class: Type[BaseProtocolHandler] = None):
         """Initialize with host, port, and handler class"""
         self.host = host
         self.port = port
         self.handler_class = handler_class
         self.server = None
-        self.active_connections: Set[TelnetProtocolHandler] = set()
+        self.active_connections: Set[BaseProtocolHandler] = set()
         self.running = True
     
     async def start_server(self) -> None:

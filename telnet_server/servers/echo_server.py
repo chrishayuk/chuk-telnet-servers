@@ -1,77 +1,118 @@
 #!/usr/bin/env python3
 """
-Echo Telnet Server Example
-A simple telnet server that echoes back what the client sends
+Character-Level Echo Telnet Server
+
+A Telnet server that demonstrates minimal processing,
+only acting when a full line is submitted.
+
+Key Features:
+- Minimal character-level processing
+- Line submission handling
+- Clean, straightforward interaction
 """
+
 import asyncio
 import logging
 import sys
-from typing import Optional
 
-# Import the base classes
-from telnet_server.protocol_handler import TelnetProtocolHandler
+# Import the character-based protocol handler
+from telnet_server.telnet_protocol_handlers import CharacterProtocolHandler
 
 # Configure logging
 logger = logging.getLogger('echo-telnet-server')
 
-class EchoTelnetHandler(TelnetProtocolHandler):
-    """Handler for echo telnet sessions"""
+class EchoTelnetHandler(CharacterProtocolHandler):
+    """
+    Interactive Telnet handler that processes input only on line submission.
+    
+    Provides:
+    - Minimal server-side character processing
+    - Line-based interaction
+    - Simple command handling
+    """
+
+    async def process_character(self, char: str) -> bool:
+        """
+        Process individual characters with minimal handling.
+        
+        Only acts on specific control characters:
+        - Enter key for line submission
+        - Ctrl-C for interrupt
+        
+        Args:
+            char (str): Single character input
+        
+        Returns:
+            bool: Whether to continue processing (False to exit)
+        """
+        # Handle line submission (Enter key)
+        if char in {'\r', '\n'}:
+            # Construct the line from input buffer
+            line = ''.join(self.input_buffer)
+            
+            # Clear the input buffer
+            self.input_buffer.clear()
+            
+            # Log the received message
+            logger.info(f"Received from {self.addr}: {line}")
+            
+            # Process special commands
+            if line.lower() in ['quit', 'exit', 'q']:
+                await self.send_line("Goodbye!")
+                return False
+            
+            # Echo the entire line back
+            await self.send_line(line)
+            
+            # Provide new prompt
+            await super().send_raw(b'> ')
+        
+        # Handle interrupt (Ctrl-C)
+        elif char == '\x03':  # Ctrl-C
+            await self.send_line("^C")
+            self.input_buffer.clear()
+            await super().send_raw(b'\r\n> ')
+        
+        # Accumulate input characters for line submission
+        elif char in {'\x7f', '\b'}:  # Delete or Backspace
+            if self.input_buffer:
+                # Remove last character from buffer
+                self.input_buffer.pop()
+        
+        # Regular character input (just accumulate)
+        else:
+            # Add character to input buffer
+            self.input_buffer.append(char)
+        
+        return True
 
     async def handle_client(self) -> None:
-        """Handle a client connection"""
+        """
+        Customize the client handling to provide a welcoming experience.
+        
+        Sends initial instructions and sets up the interactive environment.
+        """
+        # Log new connection
         logger.info(f"New connection from {self.addr}")
         
-        # Send welcome message
-        await self.send_line("Welcome to the Echo Server!")
-        await self.send_line("Type any message and I'll echo it back.")
-        await self.send_line("Type 'quit' to disconnect.")
+        # Send welcome and usage instructions
+        await self.send_line("Welcome to the Character-Level Echo Server!")
+        await self.send_line("- Type your message")
+        await self.send_line("- Press Enter to submit")
+        await self.send_line("- Type 'quit' to exit")
+        await self.send_line("- Ctrl-C will clear your current input")
+        await super().send_raw(b'\r\n> ')
         
-        await self.send_line("\n> ")
-        
-        # Main loop
-        while self.running:
-            try:
-                # Read a line from the client
-                message = await self.read_line(timeout=300)
-                
-                # Handle disconnection
-                if message is None:
-                    logger.info(f"Client {self.addr} closed connection")
-                    break
-                
-                # Log the message
-                logger.info(f"Received from {self.addr}: {message}")
-                
-                # Check for quit command
-                if message.lower() == 'quit':
-                    await self.send_line("Goodbye!")
-                    break
-                
-                # Echo the message back
-                await self.send_line(f"Echo: {message}")
-                
-                # Prompt for the next message
-                await self.send_line("\n> ")
-                
-            except asyncio.TimeoutError:
-                # Check if we're still running
-                if not self.running:
-                    break
-            
-            except Exception as e:
-                logger.error(f"Error in echo loop for {self.addr}: {e}")
-                if "Connection reset" in str(e) or "Broken pipe" in str(e):
-                    break
-                else:
-                    await asyncio.sleep(1)
+        # Call the base class's handle_client 
+        await super().handle_client()
 
-    async def cleanup(self) -> None:
-        """Optional cleanup method"""
-        logger.info(f"Cleaning up connection for {self.addr}")
-        
 # Optional: Direct server startup method (for local testing)
 def main():
-    """Main function for direct server startup"""
+    """
+    Provide a direct launch method for the echo server.
+    
+    Supports launching the server directly or through the server launcher.
+    """
     try:
         # Configure logging
         logging.basicConfig(
@@ -93,10 +134,13 @@ def main():
         
         # Run the server launcher
         server_launcher()
+    
     except KeyboardInterrupt:
         logger.info("Received keyboard interrupt.")
+    
     except Exception as e:
         logger.error(f"Unhandled exception: {e}")
+    
     finally:
         logger.info("Server process exiting.")
 

@@ -10,7 +10,7 @@ import logging
 from typing import Dict, Any, Type
 
 # imports
-from telnet_server.protocol_handler import TelnetProtocolHandler
+from telnet_server.telnet_protocol_handlers import BaseProtocolHandler
 from telnet_server.server import TelnetServer
 
 logger = logging.getLogger('server-config')
@@ -39,7 +39,7 @@ class ServerConfig:
             raise ValueError(f"Error parsing config file: {e}")
     
     @staticmethod
-    def create_server_from_config(config: Dict[str, Any], handler_class: Type[TelnetProtocolHandler]) -> TelnetServer:
+    def create_server_from_config(config: Dict[str, Any], handler_class: Type[BaseProtocolHandler]) -> TelnetServer:
         """Create a server instance from a configuration dict"""
         # Extract base server parameters
         host = config.get('host', '0.0.0.0')
