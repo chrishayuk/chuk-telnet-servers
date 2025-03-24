@@ -3,7 +3,7 @@
 Stock Feed Telnet Server
 
 A telnet-based server that provides real-time stock price information.
-Uses the robust TelnetProtocolHandler for proper terminal handling.
+Uses the modular telnet server framework with proper terminal handling.
 
 Features:
 - Real-time stock price feeds with yfinance
@@ -20,8 +20,8 @@ import time
 from typing import Dict, Any, Set, Optional
 import yfinance as yf
 
-# Import our custom telnet protocol handler
-from telnet_server.protocols.telnet_protocol_handler import TelnetProtocolHandler
+# Import from our modular architecture
+from telnet_server.handlers.telnet_handler import TelnetHandler
 from telnet_server.server import TelnetServer
 
 # Configure logging
@@ -111,10 +111,10 @@ class StockCache:
             return "Error"
 
 
-class StockFeedHandler(TelnetProtocolHandler):
+class StockFeedHandler(TelnetHandler):
     """
     Custom telnet handler for the stock feed application.
-    Inherits from the robust TelnetProtocolHandler for proper terminal handling.
+    Inherits from our modular TelnetHandler for proper terminal handling.
     """
     # Class-level stock cache shared by all instances
     stock_cache = StockCache()
@@ -139,17 +139,8 @@ class StockFeedHandler(TelnetProtocolHandler):
         """
         logger.info(f"New connection from {self.addr}")
         
-        # Negotiate terminal settings first
-        await self._send_initial_negotiations()
-        
-        # Send welcome message
-        await self.send_line("Welcome to the Stock Feed Server!")
-        await self.send_line("Type 'stock <ticker>' to start a price feed (e.g., stock AAPL)")
-        await self.send_line("Type 'quit' to disconnect")
-        await self.show_prompt()
-        
-        # Let the parent class handle the input processing loop
         try:
+            # Let the parent class handle the initial setup and input processing loop
             await super().handle_client()
         except Exception as e:
             logger.error(f"Error in stock feed client handler: {e}")
@@ -316,6 +307,21 @@ class StockFeedHandler(TelnetProtocolHandler):
         # For all other characters, use the parent implementation
         return await super().process_character(char)
 
+    async def send_welcome(self) -> None:
+        """Send a customized welcome message."""
+        welcome_text = [
+            "Welcome to the Stock Feed Server!",
+            "-------------------------------",
+            "Type 'stock <ticker>' to start a price feed (e.g., stock AAPL)",
+            "Type 'help' for available commands",
+            "Type 'quit' to disconnect"
+        ]
+        
+        for line in welcome_text:
+            await self.send_line(line)
+        
+        await self.show_prompt()
+
 
 async def shutdown_handlers():
     """Gracefully shut down all active handlers."""
@@ -353,29 +359,7 @@ async def shutdown_handlers():
         StockFeedHandler.active_handlers.clear()
 
 
-async def shutdown(server: asyncio.AbstractServer):
-    """
-    Gracefully shut down the server and all active connections.
-    
-    Args:
-        server: The server to shut down
-    """
-    global server_running
-    logger.info("Shutting down server...")
-    
-    # Stop accepting new connections
-    server.close()
-    await server.wait_closed()
-    
-    # Signal to all handlers that the server is shutting down
-    server_running = False
-    
-    # Shut down all active handlers
-    await shutdown_handlers()
-    
-    logger.info("Server shutdown complete")
-
-
+# Main function to run the server directly
 async def main():
     """
     Main entry point for the stock feed server.
@@ -385,27 +369,19 @@ async def main():
     host, port = '0.0.0.0', 8023
     
     try:
-        # Create the telnet server with our custom handler
-        server = await asyncio.start_server(
-            lambda r, w: StockFeedHandler(r, w).handle_client(),
-            host,
-            port
-        )
+        # Create and start the server
+        server = TelnetServer(host, port, StockFeedHandler)
         
         # Set up signal handlers for graceful shutdown
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(
                 sig, 
-                lambda: asyncio.create_task(shutdown(server))
+                lambda: asyncio.create_task(server.shutdown())
             )
         
-        addr = server.sockets[0].getsockname()
-        logger.info(f"Stock Feed Server running on {addr[0]}:{addr[1]}")
-        
-        # Keep the server running
-        async with server:
-            await server.serve_forever()
+        logger.info(f"Stock Feed Server running on {host}:{port}")
+        await server.start_server()
     
     except Exception as e:
         logger.error(f"Error starting server: {e}")
