@@ -1,0 +1,10 @@
+# config/echo_server.yaml
+# Echo Server Configuration
+host: 0.0.0.0
+port: 8023
+handler_class: telnet_server.servers.echo_server:EchoTelnetHandler
+
+# Optional additional configuration
+max_connections: 100
+connection_timeout: 300
+welcome_message: "Welcome to the Echo Telnet Server!"

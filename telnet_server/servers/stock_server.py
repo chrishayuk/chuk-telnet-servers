@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# src/servers/stock_server.py
 """
 Stock Telnet Server Implementation
 Uses the telnet server framework to provide stock quotes
@@ -8,10 +7,19 @@ import asyncio
 import logging
 import time
 import re
-from typing import Dict, Any, Optional, Set, List
+from typing import Dict, Any, Optional, Tuple
 
 import yfinance as yf
-from telnet_server import TelnetServer, TelnetProtocolHandler
+
+# Import the base classes
+try:
+    from telnet_server.server import TelnetServer, TelnetProtocolHandler
+except ImportError:
+    # Handle case when running from a different directory
+    import os
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from telnet_server.server import TelnetServer, TelnetProtocolHandler
 
 # Configure logging
 logger = logging.getLogger('stock-telnet-server')
@@ -22,7 +30,7 @@ class StockCache:
         self.cache: Dict[str, Dict[str, Any]] = {}
         self.ttl = cache_ttl  # Time to live in seconds
     
-    async def get_stock_price(self, ticker_symbol: str) -> tuple:
+    async def get_stock_price(self, ticker_symbol: str) -> Tuple[str, float]:
         """Get stock price for the given ticker symbol using cache if possible"""
         # Sanitize ticker symbol - remove all non-alphanumeric characters except dots and hyphens
         ticker_symbol = re.sub(r'[^\w\.-]', '', ticker_symbol).upper()
@@ -78,7 +86,7 @@ class StockTelnetHandler(TelnetProtocolHandler):
     """Handler for stock telnet sessions"""
     
     def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        """Initialize with reader/writer streams and cache"""
+        """Initialize with reader/writer streams"""
         super().__init__(reader, writer)
         self.current_ticker = None
         self.feed_active = False
@@ -107,7 +115,7 @@ class StockTelnetHandler(TelnetProtocolHandler):
                     logger.info(f"Client {self.addr} closed connection")
                     break
                 
-                logger.info(f"Received command from {self.addr}: {command}")
+                logger.debug(f"Received command from {self.addr}: {command}")
                 
                 if command.lower() == 'quit':
                     await self.send_line("Goodbye!")
@@ -122,7 +130,7 @@ class StockTelnetHandler(TelnetProtocolHandler):
                         ticker_symbol = re.sub(r'[^\w\.-]', '', raw_ticker).upper()
                         
                         if ticker_symbol:
-                            logger.info(f"Extracted ticker symbol: '{ticker_symbol}'")
+                            logger.info(f"Starting stock feed for ticker: '{ticker_symbol}'")
                             await self.handle_feed_command(ticker_symbol)
                             await self.display_menu()
                         else:
@@ -172,12 +180,12 @@ class StockTelnetHandler(TelnetProtocolHandler):
         await self.send_line("Press 'q' (or type a new 'stock <ticker>' command) then Enter to change the feed or stop it.")
         
         # Get the cache from the server
-        cache = self.server.stock_cache
+        stock_cache = self.server.stock_cache
         
         while self.feed_active and self.running:
             try:
                 # Get stock price from cache
-                price, timestamp = await cache.get_stock_price(self.current_ticker)
+                price, timestamp = await stock_cache.get_stock_price(self.current_ticker)
                 
                 # Format timestamp
                 formatted_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
@@ -264,20 +272,19 @@ class StockTelnetServer(TelnetServer):
     
     def __init__(self, host: str = '0.0.0.0', port: int = 8023):
         """Initialize with stock cache"""
-        super().__init__(host, port, self.create_handler)
+        super().__init__(host, port, StockTelnetHandler)
         self.stock_cache = StockCache()
-    
-    def create_handler(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> StockTelnetHandler:
-        """Create a new handler for a client connection"""
-        handler = StockTelnetHandler(reader, writer)
-        # Give the handler access to the server
-        handler.server = self
-        return handler
 
 
 def main():
     """Main function"""
     try:
+        # Configure logging
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        
         # Create server
         server = StockTelnetServer()
         # Start server

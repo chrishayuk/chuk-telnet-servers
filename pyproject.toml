@@ -1,3 +1,7 @@
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
 [project]
 name = "stock-telnet"
 version = "0.1.0"
@@ -5,8 +9,9 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "pyyaml>=6.0.2",
     "yfinance>=0.2.54",
 ]
 
 [tool.setuptools]
-package-dir = { "" = "src" }
+package-dir = { "" = "telnet_server" }

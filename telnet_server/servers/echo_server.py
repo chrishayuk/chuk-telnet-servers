@@ -1,25 +1,17 @@
 #!/usr/bin/env python3
-# src/servers/echo_server.py
 """
 Echo Telnet Server Example
 A simple telnet server that echoes back what the client sends
 """
 import asyncio
 import logging
-import os
 import sys
-from typing import List, Dict, Any
+from typing import Optional
 
-# imports
-from telnet_server import TelnetServer, TelnetProtocolHandler
+# Import the base classes
+from telnet_server.protocol_handler import TelnetProtocolHandler
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-
-# setup the loggers
 logger = logging.getLogger('echo-telnet-server')
 
 class EchoTelnetHandler(TelnetProtocolHandler):
@@ -73,21 +65,34 @@ class EchoTelnetHandler(TelnetProtocolHandler):
                 else:
                     await asyncio.sleep(1)
 
-
-class EchoTelnetServer(TelnetServer):
-    """Simple echo telnet server"""
-    
-    def __init__(self, host: str = '0.0.0.0', port: int = 8023):
-        """Initialize the echo server"""
-        super().__init__(host, port, EchoTelnetHandler)
-
-
+    async def cleanup(self) -> None:
+        """Optional cleanup method"""
+        logger.info(f"Cleaning up connection for {self.addr}")
+        
+# Optional: Direct server startup method (for local testing)
 def main():
-    """Main function"""
+    """Main function for direct server startup"""
     try:
-        # Create and start the echo server
-        server = EchoTelnetServer()
-        asyncio.run(server.start_server())
+        # Configure logging
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        
+        # Use the server launcher from the framework
+        from telnet_server.server_launcher import main as server_launcher
+        
+        # Simulate command-line arguments to use this module's handler
+        import sys
+        sys.argv = [
+            sys.argv[0], 
+            f"{__name__}:EchoTelnetHandler",  # Dynamically get the handler path
+            '--host', '0.0.0.0',
+            '--port', '8023'
+        ]
+        
+        # Run the server launcher
+        server_launcher()
     except KeyboardInterrupt:
         logger.info("Received keyboard interrupt.")
     except Exception as e:
@@ -95,7 +100,5 @@ def main():
     finally:
         logger.info("Server process exiting.")
 
-
 if __name__ == "__main__":
-    # call main
     main()

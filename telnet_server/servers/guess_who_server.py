@@ -12,7 +12,7 @@ import random
 from typing import List, Dict, Any
 
 # imports
-from telnet_server import TelnetServer, TelnetProtocolHandler
+from telnet_server.server import TelnetServer, TelnetProtocolHandler
 
 # Configure logging
 logging.basicConfig(
