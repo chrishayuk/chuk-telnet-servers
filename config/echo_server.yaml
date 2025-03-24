@@ -2,7 +2,7 @@
 # Echo Server Configuration
 host: 0.0.0.0
 port: 8023
-handler_class: telnet_server.servers.echo_server:EchoTelnetHandler
+handler_class: sample_servers.echo_server:EchoTelnetHandler
 
 # Optional additional configuration
 max_connections: 100

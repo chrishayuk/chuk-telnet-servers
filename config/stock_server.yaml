@@ -2,4 +2,4 @@
 # Stock Server Configuration
 host: 0.0.0.0
 port: 8023
-handler_class: telnet_server.servers.stock_server:StockFeedHandler
+handler_class: sample_servers.stock_server:StockFeedHandler

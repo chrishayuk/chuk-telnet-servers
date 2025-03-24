@@ -1,0 +1,5 @@
+# config/guess_who_server.yaml
+# Guess Who Server Configuration
+host: 0.0.0.0
+port: 8023
+handler_class: sample_servers.guess_who_server:GuessWhoHandler

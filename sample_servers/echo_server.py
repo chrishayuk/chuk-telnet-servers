@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# sample_servers/echo_server.py
 """
 Echo Telnet Server Implementation
 
@@ -6,14 +7,13 @@ A simple telnet server that echoes back what you type.
 This example demonstrates how to create a custom telnet handler
 using the modular telnet server framework.
 """
-
 import asyncio
 import logging
 from typing import Optional
 
 # Update import paths to match your directory structure
 from telnet_server.handlers.telnet_handler import TelnetHandler
-from telnet_server.server import TelnetServer  # Change from factory to server
+from telnet_server.server import TelnetServer
 
 # Configure logging for this module
 logger = logging.getLogger('echo-telnet-server')
