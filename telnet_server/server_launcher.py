@@ -23,9 +23,9 @@ import sys
 import os
 from typing import Type, Dict, Any, Optional
 
-# Core server and protocol handler imports
+# Import the updated server and base handler
 from telnet_server.server import TelnetServer
-from telnet_server.protocol_handlers.base_protocol_handler import BaseProtocolHandler
+from telnet_server.handlers.base_handler import BaseHandler
 
 def setup_logging(verbosity: int = 1) -> None:
     """
@@ -37,7 +37,7 @@ def setup_logging(verbosity: int = 1) -> None:
     - 2: DEBUG - Detailed diagnostic information
     
     Args:
-        verbosity (int): Logging verbosity level (0-2)
+        verbosity: Logging verbosity level (0-2)
     """
     # Map verbosity levels to logging levels
     log_levels = {
@@ -56,21 +56,21 @@ def setup_logging(verbosity: int = 1) -> None:
         datefmt='%Y-%m-%d %H:%M:%S'
     )
 
-def load_handler_class(handler_path: str) -> Type[BaseProtocolHandler]:
+def load_handler_class(handler_path: str) -> Type[BaseHandler]:
     """
     Dynamically load a Telnet protocol handler class from a string path.
     
     The handler path follows the format: 'module.submodule:ClassName'
     
     Args:
-        handler_path (str): Full path to the handler class
+        handler_path: Full path to the handler class
     
     Returns:
-        Type[TelnetProtocolHandler]: The loaded handler class
+        The loaded handler class
     
     Raises:
         ValueError: If the handler cannot be loaded
-        TypeError: If the loaded class is not a valid protocol handler
+        TypeError: If the loaded class is not a valid handler
     """
     try:
         # Split the path into module path and class name
@@ -82,9 +82,9 @@ def load_handler_class(handler_path: str) -> Type[BaseProtocolHandler]:
         # Retrieve the handler class from the module
         handler_class = getattr(module, class_name)
         
-        # Verify it's a proper Telnet protocol handler
-        if not issubclass(handler_class, BaseProtocolHandler):
-            raise TypeError(f"{class_name} must be a subclass of TelnetProtocolHandler")
+        # Verify it's a proper handler
+        if not issubclass(handler_class, BaseHandler):
+            raise TypeError(f"{class_name} must be a subclass of BaseHandler")
         
         return handler_class
     
@@ -99,17 +99,17 @@ def prepare_server_kwargs(config: Dict[str, Any]) -> Dict[str, Any]:
     Filters out standard configuration keys to allow custom server attributes.
     
     Args:
-        config (Dict[str, Any]): Full configuration dictionary
+        config: Full configuration dictionary
     
     Returns:
-        Dict[str, Any]: Additional server configuration parameters
+        Additional server configuration parameters
     """
     # Remove standard keys to allow custom server configuration
     standard_keys = {'host', 'port', 'handler_class'}
     return {k: v for k, v in config.items() if k not in standard_keys}
 
 async def run_server(
-    handler_class: Type[BaseProtocolHandler], 
+    handler_class: Type[BaseHandler], 
     host: str, 
     port: int, 
     server_kwargs: Optional[Dict[str, Any]] = None
@@ -121,10 +121,10 @@ async def run_server(
     and starts the server asynchronously.
     
     Args:
-        handler_class (Type[TelnetProtocolHandler]): Handler class to use
-        host (str): Host address to bind to
-        port (int): Port number to listen on
-        server_kwargs (Optional[Dict[str, Any]]): Additional server configuration
+        handler_class: Handler class to use
+        host: Host address to bind to
+        port: Port number to listen on
+        server_kwargs: Additional server configuration
     """
     # Default to empty dictionary if no kwargs provided
     server_kwargs = server_kwargs or {}
@@ -153,7 +153,7 @@ def main():
     - Error handling
     
     Returns:
-        int: Exit code (0 for success, 1 for error)
+        Exit code (0 for success, 1 for error)
     """
     # Create argument parser
     parser = argparse.ArgumentParser(
@@ -168,7 +168,7 @@ def main():
         type=str, 
         nargs='?', 
         default=None,
-        help='Handler class path (e.g., "servers.echo_server:EchoTelnetHandler")'
+        help='Handler class path (e.g., "telnet_server.handlers.telnet_handler:TelnetHandler")'
     )
     handler_group.add_argument(
         '--config', '-c', 

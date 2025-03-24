@@ -1,58 +1,153 @@
 #!/usr/bin/env python3
 """
-Echo Telnet Server
+Echo Telnet Server Implementation
 
-A Telnet server that uses TelnetProtocolHandler to manage Telnet negotiation and control sequences.
-This echo server overrides the on_command_submitted() hook to echo submitted commands.
+A simple telnet server that echoes back what you type.
+This example demonstrates how to create a custom telnet handler
+using the modular telnet server framework.
 """
 
+import asyncio
 import logging
-import sys
+from typing import Optional
 
-from telnet_server.protocol_handlers.telnet_protocol_handler import TelnetProtocolHandler
+# Update import paths to match your directory structure
+from telnet_server.handlers.telnet_handler import TelnetHandler
+from telnet_server.server import TelnetServer  # Change from factory to server
 
+# Configure logging for this module
 logger = logging.getLogger('echo-telnet-server')
 
-class EchoTelnetHandler(TelnetProtocolHandler):
+class EchoTelnetHandler(TelnetHandler):
     """
-    Echo Telnet Handler that inherits all Telnet-specific processing from TelnetProtocolHandler.
+    Custom telnet handler that echoes back commands.
     
-    It only overrides the on_command_submitted() hook to echo back submitted commands.
+    This class demonstrates how to create a simple custom handler
+    by overriding the on_command_submitted method.
     """
+    
     async def on_command_submitted(self, command: str) -> None:
         """
-        Echo the submitted command back to the client.
-        Terminates the session if the command is 'quit', 'exit', or 'q'.
+        Process a command by echoing it back to the user.
+        
+        Args:
+            command: The command submitted by the user
         """
         logger.info(f"Received command from {self.addr}: {command}")
-        if command.lower() in ['quit', 'exit', 'q']:
-            await self.send_line("Goodbye!")
-            self.running = False
+        
+        # Process special commands
+        if command.lower() == 'help':
+            await self.show_help()
+        elif command.lower() == 'info':
+            await self.show_info()
         else:
+            # Echo back the command
             await self.send_line(f"Echo: {command}")
-
-def main():
-    """
-    Direct launch method for the echo server.
     
-    Uses the server launcher infrastructure to run the Telnet server with EchoTelnetHandler.
-    """
-    try:
-        from telnet_server.server_launcher import main as server_launcher
-
-        sys.argv = [
-            sys.argv[0],
-            "telnet_server.echo_server:EchoTelnetHandler",  # Handler path
-            "--host", "0.0.0.0",
-            "--port", "8023"
+    async def show_help(self) -> None:
+        """
+        Show help information to the user.
+        """
+        help_text = [
+            "Echo Server Help",
+            "----------------",
+            "Available commands:",
+            "  help  - Show this help message",
+            "  info  - Show connection information",
+            "  quit  - Disconnect from the server",
+            "",
+            "Any other input will be echoed back to you."
         ]
-        server_launcher()
+        
+        for line in help_text:
+            await self.send_line(line)
+    
+    async def show_info(self) -> None:
+        """
+        Show connection information to the user.
+        """
+        # Build info text with basic connection details
+        # Note: We're using properties available in all TelnetHandlers
+        info_text = [
+            "Connection Information",
+            "---------------------",
+            f"Connected from: {self.addr}",
+            f"Line mode: {'Enabled' if self.line_mode else 'Disabled'}",
+        ]
+        
+        # Add terminal info if available
+        if hasattr(self, 'terminal'):
+            try:
+                info_text.append(f"Terminal type: {self.terminal.term_type}")
+                info_text.append(f"Window size: {self.terminal.window_size[0]}x{self.terminal.window_size[1]}")
+            except AttributeError:
+                info_text.append("Terminal information not available")
+        
+        # Add option info if available
+        if hasattr(self, 'options'):
+            try:
+                info_text.append(f"Echo option: {'Enabled' if self.options.is_local_enabled(1) else 'Disabled'}")
+            except AttributeError:
+                info_text.append("Option information not available")
+        
+        for line in info_text:
+            await self.send_line(line)
+    
+    async def send_welcome(self) -> None:
+        """
+        Send a welcome message to the client.
+        """
+        # Check if a custom welcome message was specified in server config
+        custom_welcome = None
+        if hasattr(self.server, 'welcome_message'):
+            custom_welcome = self.server.welcome_message
+        
+        # Default welcome message
+        welcome_text = [
+            custom_welcome or "Welcome to the Echo Server!",
+            "-------------------------",
+            "Type 'help' for available commands.",
+            "Type 'quit' to disconnect."
+        ]
+        
+        for line in welcome_text:
+            await self.send_line(line)
+        
+        await self.show_prompt()
+
+# Standalone server functionality if this module is executed directly
+async def main():
+    """
+    Main function to start the echo server.
+    """
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    # Server parameters
+    host, port = '0.0.0.0', 8023
+    
+    # Create and start the server
+    logger.info(f"Starting Echo Server on {host}:{port}")
+    server = TelnetServer(host, port, EchoTelnetHandler)
+    
+    try:
+        await server.start_server()
     except KeyboardInterrupt:
         logger.info("Server shutdown initiated by user.")
     except Exception as e:
-        logger.error(f"Unhandled exception: {e}")
+        logger.error(f"Error running server: {e}")
     finally:
-        logger.info("Server process exiting.")
+        logger.info("Echo Server has shut down.")
 
+# Run the server if this module is executed directly
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Received keyboard interrupt.")
+    except Exception as e:
+        logger.error(f"Unhandled exception: {e}")

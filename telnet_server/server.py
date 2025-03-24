@@ -2,34 +2,60 @@
 # telnet_server/server.py
 """
 Telnet Server Module
-Core telnet server implementation with connection management
+
+Core telnet server implementation with connection management.
+This module provides the foundation for hosting telnet services
+with proper connection lifecycle management and graceful shutdown.
 """
 import asyncio
 import logging
 import signal
 from typing import Dict, Any, Optional, Set, List, Callable, Awaitable, Type
 
-# Import the protocol handler
-from telnet_server.protocol_handlers.base_protocol_handler import BaseProtocolHandler
+# Import the protocol handler - updated for new architecture
+from telnet_server.handlers.base_handler import BaseHandler
 
 # Configure logging
 logger = logging.getLogger('telnet-server')
 
 class TelnetServer:
-    """Telnet server with connection handling capabilities"""
+    """
+    Telnet server with connection handling capabilities.
+    
+    This class manages the lifecycle of a telnet server, including
+    starting and stopping the server, handling client connections,
+    and providing utilities for server-wide operations.
+    """
     
     def __init__(self, host: str = '0.0.0.0', port: int = 8023, 
-                 handler_class: Type[BaseProtocolHandler] = None):
-        """Initialize with host, port, and handler class"""
+                 handler_class: Type[BaseHandler] = None):
+        """
+        Initialize the telnet server with host, port, and handler class.
+        
+        Args:
+            host: Host address to bind to
+            port: Port number to listen on
+            handler_class: Handler class to use for client connections
+        """
         self.host = host
         self.port = port
         self.handler_class = handler_class
         self.server = None
-        self.active_connections: Set[BaseProtocolHandler] = set()
+        self.active_connections: Set[BaseHandler] = set()
         self.running = True
     
     async def start_server(self) -> None:
-        """Start the telnet server"""
+        """
+        Start the telnet server.
+        
+        This method starts the server listening for connections
+        on the specified host and port, and sets up signal handlers
+        for graceful shutdown.
+        
+        Raises:
+            ValueError: If no handler class was provided
+            Exception: If an error occurs while starting the server
+        """
         if not self.handler_class:
             raise ValueError("Handler class must be provided")
         
@@ -59,7 +85,16 @@ class TelnetServer:
     
     async def handle_new_connection(self, reader: asyncio.StreamReader, 
                                    writer: asyncio.StreamWriter) -> None:
-        """Handle a new client connection"""
+        """
+        Handle a new client connection.
+        
+        This method creates a handler instance for the new client,
+        adds it to the active connections, and starts processing.
+        
+        Args:
+            reader: The stream reader for the client
+            writer: The stream writer for the client
+        """
         # Create handler
         handler = self.handler_class(reader, writer)
         handler.server = self  # Set reference to server
@@ -88,30 +123,52 @@ class TelnetServer:
             if handler in self.active_connections:
                 self.active_connections.remove(handler)
     
-    async def handle_client(self, handler) -> None:
+    async def handle_client(self, handler: BaseHandler) -> None:
         """
-        Handle a client using the handler
-        Override this method in subclasses if needed
+        Handle a client using the handler.
+        
+        This method delegates client handling to the handler's
+        handle_client method.
+        
+        Args:
+            handler: The handler for the client
+            
+        Raises:
+            NotImplementedError: If the handler doesn't implement handle_client
         """
         if hasattr(handler, 'handle_client'):
             await handler.handle_client()
         else:
             raise NotImplementedError("Handler must implement handle_client method")
     
-    async def cleanup_connection(self, handler) -> None:
+    async def cleanup_connection(self, handler: BaseHandler) -> None:
         """
-        Clean up a connection
-        Override this method in subclasses if needed
+        Clean up a connection.
+        
+        This method delegates connection cleanup to the handler's
+        cleanup method.
+        
+        Args:
+            handler: The handler for the client
         """
         if hasattr(handler, 'cleanup'):
             await handler.cleanup()
     
     async def send_global_message(self, message: str) -> None:
-        """Send a message to all connected clients"""
+        """
+        Send a message to all connected clients.
+        
+        This method sends a message to all active connections,
+        which can be useful for broadcasts or server-wide notifications.
+        
+        Args:
+            message: The message to send
+        """
         send_tasks = []
         for handler in self.active_connections:
             try:
-                send_tasks.append(asyncio.create_task(handler.send_line(message)))
+                if hasattr(handler, 'send_line'):
+                    send_tasks.append(asyncio.create_task(handler.send_line(message)))
             except Exception as e:
                 logger.error(f"Error preparing to send message to client: {e}")
         
@@ -119,7 +176,12 @@ class TelnetServer:
             await asyncio.gather(*send_tasks, return_exceptions=True)
     
     async def shutdown(self) -> None:
-        """Gracefully shut down the server"""
+        """
+        Gracefully shut down the server.
+        
+        This method stops accepting new connections, notifies all
+        clients of the shutdown, and closes all active connections.
+        """
         logger.info("Shutting down telnet server...")
         
         # Stop accepting new connections

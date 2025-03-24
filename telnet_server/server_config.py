@@ -2,25 +2,46 @@
 # telnet_server/server_config.py
 """
 Server Configuration Module
-Helps initialize telnet servers with specific configurations
+
+Helps initialize telnet servers with specific configurations.
+This module provides utilities for loading and validating
+server configurations from YAML files.
 """
 import os
 import yaml
 import logging
 from typing import Dict, Any, Type
 
-# imports
-from telnet_server.protocol_handlers.base_protocol_handler import BaseProtocolHandler
+# Import the updated server and base handler
+from telnet_server.handlers.base_handler import BaseHandler
 from telnet_server.server import TelnetServer
 
 logger = logging.getLogger('server-config')
 
 class ServerConfig:
-    """Manages server configuration from YAML files"""
+    """
+    Manages server configuration from YAML files.
+    
+    This class provides static methods for loading configurations
+    from YAML files, validating them, and creating server instances
+    based on those configurations.
+    """
     
     @staticmethod
     def load_config(config_file: str) -> Dict[str, Any]:
-        """Load a configuration from a YAML file"""
+        """
+        Load a configuration from a YAML file.
+        
+        Args:
+            config_file: Path to the YAML configuration file
+            
+        Returns:
+            The loaded configuration as a dictionary
+            
+        Raises:
+            FileNotFoundError: If the configuration file doesn't exist
+            ValueError: If the configuration is invalid or can't be parsed
+        """
         if not os.path.exists(config_file):
             raise FileNotFoundError(f"Config file not found: {config_file}")
         
@@ -39,8 +60,20 @@ class ServerConfig:
             raise ValueError(f"Error parsing config file: {e}")
     
     @staticmethod
-    def create_server_from_config(config: Dict[str, Any], handler_class: Type[BaseProtocolHandler]) -> TelnetServer:
-        """Create a server instance from a configuration dict"""
+    def create_server_from_config(
+        config: Dict[str, Any], 
+        handler_class: Type[BaseHandler]
+    ) -> TelnetServer:
+        """
+        Create a server instance from a configuration dictionary.
+        
+        Args:
+            config: The configuration dictionary
+            handler_class: The handler class to use
+            
+        Returns:
+            A configured TelnetServer instance
+        """
         # Extract base server parameters
         host = config.get('host', '0.0.0.0')
         port = config.get('port', 8023)

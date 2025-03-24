@@ -21,7 +21,7 @@ from typing import Dict, Any, Set, Optional
 import yfinance as yf
 
 # Import our custom telnet protocol handler
-from telnet_server.protocol_handlers.telnet_protocol_handler import TelnetProtocolHandler
+from telnet_server.protocols.telnet_protocol_handler import TelnetProtocolHandler
 from telnet_server.server import TelnetServer
 
 # Configure logging

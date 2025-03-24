@@ -27,7 +27,7 @@ logger = logging.getLogger('test-server')
 
 # Import server classes
 from telnet_server.server import TelnetServer
-from telnet_server.protocol_handlers.telnet_protocol_handler import TelnetProtocolHandler
+from telnet_server.protocols.telnet_protocol_handler import TelnetProtocolHandler
 
 class TestEchoHandler(TelnetProtocolHandler):
     """A simple echo handler for testing."""
