@@ -10,7 +10,7 @@ import logging
 from typing import Dict, Any, Type
 
 # imports
-from telnet_server.telnet_protocol_handlers import BaseProtocolHandler
+from telnet_server.protocol_handlers.base_protocol_handler import BaseProtocolHandler
 from telnet_server.server import TelnetServer
 
 logger = logging.getLogger('server-config')

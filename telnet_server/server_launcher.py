@@ -25,7 +25,7 @@ from typing import Type, Dict, Any, Optional
 
 # Core server and protocol handler imports
 from telnet_server.server import TelnetServer
-from telnet_server.telnet_protocol_handlers import BaseProtocolHandler
+from telnet_server.protocol_handlers.base_protocol_handler import BaseProtocolHandler
 
 def setup_logging(verbosity: int = 1) -> None:
     """

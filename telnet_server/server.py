@@ -10,7 +10,7 @@ import signal
 from typing import Dict, Any, Optional, Set, List, Callable, Awaitable, Type
 
 # Import the protocol handler
-from telnet_server.telnet_protocol_handlers import BaseProtocolHandler
+from telnet_server.protocol_handlers.base_protocol_handler import BaseProtocolHandler
 
 # Configure logging
 logger = logging.getLogger('telnet-server')

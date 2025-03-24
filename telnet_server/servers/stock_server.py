@@ -1,60 +1,85 @@
 #!/usr/bin/env python3
 """
-Stock Telnet Server Implementation
-Uses the telnet server framework to provide stock quotes
+Stock Feed Telnet Server
+
+A telnet-based server that provides real-time stock price information.
+Uses the robust TelnetProtocolHandler for proper terminal handling.
+
+Features:
+- Real-time stock price feeds with yfinance
+- Proper terminal handling for telnet clients
+- Caching to prevent excessive API requests
+- Graceful shutdown handling
+- Thread-safe connection management
 """
+
 import asyncio
 import logging
+import signal
 import time
-import re
-from typing import Dict, Any, Optional, Tuple
-
+from typing import Dict, Any, Set, Optional
 import yfinance as yf
 
-# Import the base classes
-try:
-    from telnet_server.server import TelnetServer, TelnetProtocolHandler
-except ImportError:
-    # Handle case when running from a different directory
-    import os
-    import sys
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from telnet_server.server import TelnetServer, TelnetProtocolHandler
+# Import our custom telnet protocol handler
+from telnet_server.protocol_handlers.telnet_protocol_handler import TelnetProtocolHandler
+from telnet_server.server import TelnetServer
 
 # Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger('stock-telnet-server')
 
+# Global state
+server_running = True
+
 class StockCache:
-    """Cache stock data to avoid excessive API requests"""
+    """
+    Cache for stock price data to avoid excessive API requests.
+    Thread-safe implementation for use in async environment.
+    """
     def __init__(self, cache_ttl: int = 5):
         self.cache: Dict[str, Dict[str, Any]] = {}
         self.ttl = cache_ttl  # Time to live in seconds
+        self.lock = asyncio.Lock()  # For thread safety
     
-    async def get_stock_price(self, ticker_symbol: str) -> Tuple[str, float]:
-        """Get stock price for the given ticker symbol using cache if possible"""
-        # Sanitize ticker symbol - remove all non-alphanumeric characters except dots and hyphens
-        ticker_symbol = re.sub(r'[^\w\.-]', '', ticker_symbol).upper()
+    async def get_stock_price(self, ticker_symbol: str) -> tuple:
+        """
+        Get stock price for the given ticker symbol using cache if possible.
+        
+        Args:
+            ticker_symbol: The stock ticker symbol
+        
+        Returns:
+            A tuple of (price, timestamp)
+        """
+        # Sanitize ticker symbol
+        ticker_symbol = ticker_symbol.strip().upper()
         
         current_time = time.time()
         
-        # Check cache
-        if ticker_symbol in self.cache:
-            cached_data = self.cache[ticker_symbol]
-            if current_time - cached_data['timestamp'] < self.ttl:
-                return cached_data['price'], cached_data['timestamp']
+        # Check cache with lock to ensure thread safety
+        async with self.lock:
+            # Check if we have a valid cached entry
+            if ticker_symbol in self.cache:
+                cached_data = self.cache[ticker_symbol]
+                if current_time - cached_data['timestamp'] < self.ttl:
+                    return cached_data['price'], cached_data['timestamp']
         
-        # Fetch new data
+        # Not in cache or expired, fetch new data
         try:
             # Execute in a separate thread pool to avoid blocking
             price = await asyncio.get_event_loop().run_in_executor(
                 None, self._fetch_stock_price, ticker_symbol
             )
             
-            # Update cache
-            self.cache[ticker_symbol] = {
-                'price': price,
-                'timestamp': current_time
-            }
+            # Update cache with lock
+            async with self.lock:
+                self.cache[ticker_symbol] = {
+                    'price': price,
+                    'timestamp': current_time
+                }
             
             return price, current_time
         except Exception as e:
@@ -62,14 +87,18 @@ class StockCache:
             return "Error", current_time
     
     def _fetch_stock_price(self, ticker_symbol: str) -> str:
-        """Actual API call to fetch stock price - runs in thread pool"""
+        """
+        Actual API call to fetch stock price - runs in thread pool.
+        
+        Args:
+            ticker_symbol: The stock ticker symbol
+        
+        Returns:
+            The stock price as a string, or an error message
+        """
         try:
-            # Additional validation to prevent API errors
-            if not ticker_symbol or len(ticker_symbol) < 1 or len(ticker_symbol) > 10:
-                logger.warning(f"Invalid ticker symbol: '{ticker_symbol}'")
-                return "Invalid ticker"
-            
             ticker = yf.Ticker(ticker_symbol)
+            # Get the most recent history (more reliable than real-time data)
             ticker_data = ticker.history(period="1d")
             if ticker_data.empty:
                 return "N/A"
@@ -82,220 +111,314 @@ class StockCache:
             return "Error"
 
 
-class StockTelnetHandler(TelnetProtocolHandler):
-    """Handler for stock telnet sessions"""
+class StockFeedHandler(TelnetProtocolHandler):
+    """
+    Custom telnet handler for the stock feed application.
+    Inherits from the robust TelnetProtocolHandler for proper terminal handling.
+    """
+    # Class-level stock cache shared by all instances
+    stock_cache = StockCache()
+    
+    # To track all active handlers for server shutdown
+    active_handlers: Set['StockFeedHandler'] = set()
     
     def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        """Initialize with reader/writer streams"""
+        """Initialize the stock feed handler."""
         super().__init__(reader, writer)
-        self.current_ticker = None
-        self.feed_active = False
+        
+        # Stock feed specific state
+        self.current_feed: Optional[str] = None
+        self.feed_task = None
+        
+        # Add to active handlers
+        StockFeedHandler.active_handlers.add(self)
     
     async def handle_client(self) -> None:
-        """Handle a client connection"""
+        """
+        Override the handle_client method to provide stock-specific welcome message.
+        """
         logger.info(f"New connection from {self.addr}")
+        
+        # Negotiate terminal settings first
+        await self._send_initial_negotiations()
         
         # Send welcome message
         await self.send_line("Welcome to the Stock Feed Server!")
-        await self.send_line("You can request a stock feed by typing:")
-        await self.send_line("  stock <ticker>   (e.g., stock AAPL for Apple Inc.)")
-        await self.send_line("Type 'quit' to disconnect.")
+        await self.send_line("Type 'stock <ticker>' to start a price feed (e.g., stock AAPL)")
+        await self.send_line("Type 'quit' to disconnect")
+        await self.show_prompt()
         
-        # Display menu
-        await self.display_menu()
-        
-        while self.running:
-            try:
-                # Prompt for command
-                await self.send_line("\n> ")
-                
-                # Read command with timeout
-                command = await self.read_line(timeout=300)  # 5 minute timeout
-                if command is None:
-                    logger.info(f"Client {self.addr} closed connection")
-                    break
-                
-                logger.debug(f"Received command from {self.addr}: {command}")
-                
-                if command.lower() == 'quit':
-                    await self.send_line("Goodbye!")
-                    break
-                
-                elif command.lower().startswith('stock'):
-                    # Use regex to extract the ticker symbol safely
-                    match = re.search(r'stock\s+([^\s]+)', command.lower())
-                    if match:
-                        raw_ticker = match.group(1)
-                        # Sanitize the ticker
-                        ticker_symbol = re.sub(r'[^\w\.-]', '', raw_ticker).upper()
-                        
-                        if ticker_symbol:
-                            logger.info(f"Starting stock feed for ticker: '{ticker_symbol}'")
-                            await self.handle_feed_command(ticker_symbol)
-                            await self.display_menu()
-                        else:
-                            await self.send_line("Error: Invalid ticker symbol")
-                    else:
-                        await self.send_line("Error: Provide a ticker symbol, e.g., 'stock AAPL'")
-                
-                else:
-                    await self.send_line("Unknown command.")
-                    await self.display_menu()
-            
-            except asyncio.TimeoutError:
-                # Timeout waiting for command - check if server is still running
-                if not self.running:
-                    break
-                # Else just continue the loop
-            
-            except Exception as e:
-                logger.error(f"Error in client command loop for {self.addr}: {e}")
-                if "Connection reset" in str(e) or "Broken pipe" in str(e):
-                    break
-                else:
-                    # For unexpected errors, wait a bit to avoid spamming logs
-                    await asyncio.sleep(1)
+        # Let the parent class handle the input processing loop
+        try:
+            await super().handle_client()
+        except Exception as e:
+            logger.error(f"Error in stock feed client handler: {e}")
+        finally:
+            # Stop any running feed task
+            await self._stop_feed()
+            # Remove from active handlers
+            StockFeedHandler.active_handlers.discard(self)
     
-    async def display_menu(self) -> None:
-        """Display the server menu"""
-        await self.send_line("\n--- Menu ---")
-        await self.send_line("stock <ticker> : Start (or switch to) a stock price feed for the specified ticker (e.g., stock AAPL)")
-        await self.send_line("quit           : Disconnect from the server")
-        await self.send_line("--------------")
+    async def on_command_submitted(self, command: str) -> None:
+        """
+        Process commands for the stock feed server.
+        
+        Args:
+            command: The command submitted by the user
+        """
+        parts = command.strip().split(maxsplit=1)
+        cmd = parts[0].lower() if parts else ""
+        
+        if cmd == "stock" and len(parts) > 1:
+            # Stock feed command - extract ticker symbol
+            ticker = parts[1].strip().upper()
+            await self._start_feed(ticker)
+        elif cmd == "stop":
+            # Stop the current feed
+            await self._stop_feed()
+            await self.send_line("Feed stopped.")
+        elif cmd == "help":
+            # Show help
+            await self._show_help()
+        else:
+            # Unknown command
+            await self.send_line(f"Unknown command: {command}")
+            await self.send_line("Type 'help' for available commands")
     
-    async def handle_feed_command(self, ticker_symbol: str) -> None:
-        """Handle a stock feed command with proper timeout and interruption handling"""
-        # Critical sanitization of ticker symbol
-        ticker_symbol = re.sub(r'[^\w\.-]', '', ticker_symbol).upper()
+    async def _start_feed(self, ticker: str) -> None:
+        """
+        Start a stock price feed for the given ticker.
+        Stops any existing feed first.
         
-        if not ticker_symbol:
-            await self.send_line("Error: Invalid ticker symbol")
-            return
+        Args:
+            ticker: The stock ticker symbol
+        """
+        # Stop any existing feed
+        await self._stop_feed()
         
-        self.feed_active = True
-        self.current_ticker = ticker_symbol
+        # Set the current feed
+        self.current_feed = ticker
         
-        # Notify the client
-        await self.send_line(f"Starting feed for {self.current_ticker}.")
-        await self.send_line("Press 'q' (or type a new 'stock <ticker>' command) then Enter to change the feed or stop it.")
+        # Start a new feed task
+        await self.send_line(f"Starting price feed for {ticker}...")
+        await self.send_line("Press Ctrl+C or type 'stop' to stop the feed")
         
-        # Get the cache from the server
-        stock_cache = self.server.stock_cache
-        
-        while self.feed_active and self.running:
+        self.feed_task = asyncio.create_task(self._run_feed(ticker))
+    
+    async def _stop_feed(self) -> None:
+        """Stop the current stock feed if one is running."""
+        if self.feed_task and not self.feed_task.done():
+            self.feed_task.cancel()
             try:
-                # Get stock price from cache
-                price, timestamp = await stock_cache.get_stock_price(self.current_ticker)
-                
-                # Format timestamp
-                formatted_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
-                
-                # Send the price update
-                await self.send_line(f"[{formatted_time}] {self.current_ticker}: {price}")
-                
-                # Wait for input with timeout
+                await self.feed_task
+            except asyncio.CancelledError:
+                pass  # Task cancellation is expected
+            
+        self.current_feed = None
+        self.feed_task = None
+    
+    async def _run_feed(self, ticker: str) -> None:
+        """
+        Run the stock price feed for the given ticker.
+        Fetches prices regularly and displays them to the user.
+        
+        Args:
+            ticker: The stock ticker symbol
+        """
+        try:
+            # Initial fetch to check if the ticker is valid
+            price, timestamp = await self.stock_cache.get_stock_price(ticker)
+            if price == "Error" or price == "N/A":
+                await self.send_line(f"Could not fetch price for {ticker}. Please check the ticker symbol.")
+                self.current_feed = None
+                return
+            
+            # Display the initial price
+            formatted_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
+            await self.send_line(f"[{formatted_time}] {ticker}: {price}")
+            
+            # Loop to provide regular updates
+            while server_running and self.running and self.current_feed == ticker:
                 try:
-                    # Set up a task to read with a timeout
-                    read_task = asyncio.create_task(self.reader.readline())
+                    # Wait a bit between updates
+                    await asyncio.sleep(5)
                     
-                    # Wait for input with timeout
-                    done, pending = await asyncio.wait(
-                        [read_task], 
-                        timeout=5,
-                        return_when=asyncio.FIRST_COMPLETED
-                    )
+                    # Check if we should still be running
+                    if not (server_running and self.running and self.current_feed == ticker):
+                        break
                     
-                    # If we got input
-                    if read_task in done:
-                        try:
-                            data = await read_task
-                            # Critical: handle empty data (connection closed)
-                            if not data:
-                                logger.info("Connection closed during feed")
-                                self.feed_active = False
-                                break
-                                
-                            incoming = data.decode('utf-8', errors='ignore').strip()
-                            
-                            if incoming.lower() == 'q':
-                                await self.send_line("Feed stopped.")
-                                self.feed_active = False
-                            elif incoming.lower().startswith('stock'):
-                                # Extract ticker symbol safely
-                                match = re.search(r'stock\s+([^\s]+)', incoming.lower())
-                                if match:
-                                    raw_ticker = match.group(1)
-                                    # Sanitize the ticker symbol
-                                    new_ticker = re.sub(r'[^\w\.-]', '', raw_ticker).upper()
-                                    
-                                    if new_ticker:
-                                        await self.send_line(f"Switching feed to {new_ticker}...")
-                                        self.current_ticker = new_ticker
-                                    else:
-                                        await self.send_line("Error: Invalid ticker symbol")
-                                else:
-                                    await self.send_line("Error: Invalid command format. Use 'stock SYMBOL'")
-                            else:
-                                await self.send_line("Unknown input. Type 'q' to stop or 'stock <ticker>' to switch.")
-                        except Exception as e:
-                            logger.error(f"Error processing client input: {e}")
-                            self.feed_active = False
-                    else:
-                        # Timeout occurred - cancel the read task
-                        for task in pending:
-                            task.cancel()
+                    # Fetch current price
+                    price, timestamp = await self.stock_cache.get_stock_price(ticker)
+                    formatted_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
+                    
+                    # Display the update
+                    await self.send_line(f"[{formatted_time}] {ticker}: {price}")
                     
                 except asyncio.CancelledError:
-                    # The task was canceled - we can continue with the loop
-                    continue
+                    # Feed was cancelled
+                    raise
                 except Exception as e:
-                    logger.error(f"Error during feed input handling: {e}")
-                    if "Connection reset" in str(e) or "Broken pipe" in str(e):
-                        logger.info("Client disconnected during feed")
-                        self.feed_active = False
-                    
-            except Exception as e:
-                logger.error(f"Error during feed loop: {e}")
-                if "Connection reset" in str(e) or "Broken pipe" in str(e):
-                    logger.info("Client disconnected during feed")
-                    self.feed_active = False
-                else:
-                    # For other errors, wait a bit before retrying
-                    await asyncio.sleep(1)
+                    logger.error(f"Error in feed loop for {ticker}: {e}")
+                    await asyncio.sleep(1)  # Brief pause on error
         
-        self.feed_active = False
-        self.current_ticker = None
-
-
-class StockTelnetServer(TelnetServer):
-    """Telnet server providing stock information"""
+        except asyncio.CancelledError:
+            # Task cancellation is expected behavior
+            logger.debug(f"Feed for {ticker} was cancelled")
+        except Exception as e:
+            logger.error(f"Error running feed for {ticker}: {e}")
+            await self.send_line(f"Error in feed: {e}")
+        finally:
+            # Make sure we clean up properly
+            self.current_feed = None
     
-    def __init__(self, host: str = '0.0.0.0', port: int = 8023):
-        """Initialize with stock cache"""
-        super().__init__(host, port, StockTelnetHandler)
-        self.stock_cache = StockCache()
+    async def _show_help(self) -> None:
+        """Display help information to the user."""
+        help_text = [
+            "Available commands:",
+            "  stock <ticker>  - Start a price feed for the given stock ticker",
+            "  stop            - Stop the current price feed",
+            "  help            - Show this help message",
+            "  quit            - Disconnect from the server",
+            "",
+            "Examples:",
+            "  stock AAPL      - Get Apple stock prices",
+            "  stock MSFT      - Get Microsoft stock prices",
+            "  stock GOOGL     - Get Google stock prices"
+        ]
+        
+        for line in help_text:
+            await self.send_line(line)
+    
+    async def process_character(self, char: str) -> bool:
+        """
+        Override to handle Ctrl+C specially for the stock feed.
+        We'll stop the current feed rather than disconnecting.
+        
+        Args:
+            char: The character to process
+        
+        Returns:
+            True to continue, False to disconnect
+        """
+        # Check for Ctrl+C specifically
+        if char == "\x03":
+            if self.current_feed:
+                # If we have an active feed, stop it instead of disconnecting
+                await self.send_line("\n^C - Stopping current feed.")
+                await self._stop_feed()
+                await self.show_prompt()
+                return True
+            else:
+                # No feed running, so exit as normal
+                await self.send_line("\n^C - Closing connection.")
+                return False
+        
+        # For all other characters, use the parent implementation
+        return await super().process_character(char)
 
 
-def main():
-    """Main function"""
+async def shutdown_handlers():
+    """Gracefully shut down all active handlers."""
+    if StockFeedHandler.active_handlers:
+        logger.info(f"Shutting down {len(StockFeedHandler.active_handlers)} active connections...")
+        
+        # Send a goodbye message to all clients
+        shutdown_tasks = []
+        for handler in list(StockFeedHandler.active_handlers):
+            try:
+                # Stop any active feeds
+                if handler.current_feed:
+                    await handler.send_line("\nServer is shutting down. Stopping feed...")
+                    await handler._stop_feed()
+                
+                # Send goodbye message
+                await handler.send_line("\nServer is shutting down. Goodbye!")
+                
+                # Close the connection
+                handler.writer.close()
+                shutdown_tasks.append(handler.writer.wait_closed())
+            except Exception as e:
+                logger.warning(f"Error sending shutdown message: {e}")
+        
+        # Wait for all connections to close (with timeout)
+        if shutdown_tasks:
+            try:
+                done, pending = await asyncio.wait(shutdown_tasks, timeout=5)
+                if pending:
+                    logger.warning(f"{len(pending)} connections did not close gracefully")
+            except Exception as e:
+                logger.error(f"Error waiting for connections to close: {e}")
+        
+        # Clear the set
+        StockFeedHandler.active_handlers.clear()
+
+
+async def shutdown(server: asyncio.AbstractServer):
+    """
+    Gracefully shut down the server and all active connections.
+    
+    Args:
+        server: The server to shut down
+    """
+    global server_running
+    logger.info("Shutting down server...")
+    
+    # Stop accepting new connections
+    server.close()
+    await server.wait_closed()
+    
+    # Signal to all handlers that the server is shutting down
+    server_running = False
+    
+    # Shut down all active handlers
+    await shutdown_handlers()
+    
+    logger.info("Server shutdown complete")
+
+
+async def main():
+    """
+    Main entry point for the stock feed server.
+    Sets up the server and signal handlers for graceful shutdown.
+    """
+    # Start the server
+    host, port = '0.0.0.0', 8023
+    
     try:
-        # Configure logging
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        # Create the telnet server with our custom handler
+        server = await asyncio.start_server(
+            lambda r, w: StockFeedHandler(r, w).handle_client(),
+            host,
+            port
         )
         
-        # Create server
-        server = StockTelnetServer()
-        # Start server
-        asyncio.run(server.start_server())
+        # Set up signal handlers for graceful shutdown
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(
+                sig, 
+                lambda: asyncio.create_task(shutdown(server))
+            )
+        
+        addr = server.sockets[0].getsockname()
+        logger.info(f"Stock Feed Server running on {addr[0]}:{addr[1]}")
+        
+        # Keep the server running
+        async with server:
+            await server.serve_forever()
+    
+    except Exception as e:
+        logger.error(f"Error starting server: {e}")
+    finally:
+        logger.info("Server has shut down.")
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Received keyboard interrupt.")
     except Exception as e:
         logger.error(f"Unhandled exception: {e}")
     finally:
         logger.info("Server process exiting.")
-
-
-if __name__ == "__main__":
-    main()

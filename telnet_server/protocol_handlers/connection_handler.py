@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# telnet_server/connection_handler.py
+# telnet_server/protocol_handlers/connection_handler.py
 """
 Generic Connection Handler Module
 Base class for protocol-agnostic connection handlers
