@@ -71,7 +71,8 @@ async def send_initial_negotiations(writer: asyncio.StreamWriter) -> None:
     """
     logger.debug("Sending initial negotiations")
     
-    # We want to handle echoing ourselves
+    # We want to handle echoing ourselves - this server always echoes characters
+    # so we consistently inform the client about this behavior
     await send_command(writer, WILL, OPT_ECHO)
     
     # We'll suppress GA (modern telnet behavior)
@@ -182,17 +183,19 @@ async def process_negotiation(
     
     elif option == OPT_ECHO:
         if command == DO:
-            # Client wants us to echo characters
+            # Client wants us to echo characters - which is what we want to do anyway
             logger.debug("Client says DO ECHO - we agree")
             await send_command(writer, WILL, OPT_ECHO)
             option_manager.set_local_option(OPT_ECHO, True)
         elif command == DONT:
-            # Client doesn't want us to echo
-            logger.debug("Client says DONT ECHO - we comply")
-            await send_command(writer, WONT, OPT_ECHO)
-            option_manager.set_local_option(OPT_ECHO, False)
+            # Client doesn't want us to echo - but we need to for our application
+            # Instead of complying with WONT ECHO, we maintain our echo behavior
+            logger.debug("Client says DONT ECHO - but we need to handle echo")
+            # We don't send WONT ECHO here because we actually need to handle echo
+            # This ensures our behavior matches our protocol messages
+            option_manager.set_local_option(OPT_ECHO, True)  # Keep echo enabled
         elif command == WILL:
-            # Client wants to echo - we prefer to handle it
+            # Client wants to echo - we prefer to handle it ourselves
             logger.debug("Client says WILL ECHO - we refuse")
             await send_command(writer, DONT, OPT_ECHO)
             option_manager.set_remote_option(OPT_ECHO, False)
