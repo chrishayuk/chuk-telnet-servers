@@ -147,7 +147,7 @@ class ServerConfig:
                 raise ImportError(f"Could not create TCP server: {e}.")
         elif transport == TRANSPORT_WEBSOCKET:
             try:
-                from telnet_server.transports.websocket.ws_server import WebSocketServer
+                from telnet_server.transports.websocket.ws_server_plain import PlainWebSocketServer
                 ws_path = config.get('ws_path', '/telnet')
                 use_ssl = config.get('use_ssl', False)
                 ssl_cert = config.get('ssl_cert', None)
@@ -155,7 +155,7 @@ class ServerConfig:
                 ping_interval = config.get('ping_interval', 30)
                 ping_timeout = config.get('ping_timeout', 10)
                 allow_origins = config.get('allow_origins', ['*'])
-                server = WebSocketServer(
+                server = PlainWebSocketServer(
                     host=host, 
                     port=port, 
                     handler_class=handler_class,
@@ -242,7 +242,7 @@ class ServerConfig:
             'welcome_message': "Welcome to the Server!"
         }
         
-        if transport == TRANSPORT_WEBSOCKET or transport == "ws_telnet":
+        if transport in [TRANSPORT_WEBSOCKET, "ws_telnet"]:
             config.update({
                 'ws_path': '/telnet',
                 'use_ssl': False,

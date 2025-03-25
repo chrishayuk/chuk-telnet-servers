@@ -14,11 +14,10 @@ import importlib
 import logging
 import sys
 import os
-from typing import Type, Dict, Any, Optional, Union, List
+from typing import Type, Dict, Any, Union, List
 
-# imports
 from telnet_server.handlers.base_handler import BaseHandler
-from telnet_server.server import TelnetServer  # For fallback
+from telnet_server.server import TelnetServer  # fallback if needed
 
 # Define transport constants
 TRANSPORT_TELNET = "telnet"
@@ -99,6 +98,7 @@ def main():
                 for server_name, server_conf in config["servers"].items():
                     logger.info(f"Configuring server: {server_name}")
                     handler_class = load_handler_class(server_conf['handler_class'])
+                    # Command-line overrides if provided:
                     if args.host != '0.0.0.0':
                         server_conf['host'] = args.host
                     if args.port != 8023:

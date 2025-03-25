@@ -12,16 +12,11 @@ from typing import Optional, Type
 from websockets.server import WebSocketServerProtocol
 from websockets.exceptions import ConnectionClosed
 
-# Import base handler and adapter interfaces
 from telnet_server.handlers.base_handler import BaseHandler
 from telnet_server.transports.transport_adapter import BaseTransportAdapter
 from telnet_server.transports.websocket.ws_reader import WebSocketReader
 from telnet_server.transports.websocket.ws_writer import WebSocketWriter
 
-# websockets are available
-WEBSOCKETS_AVAILABLE = True
-
-# Configure logging
 logger = logging.getLogger('websocket-adapter')
 
 class WebSocketAdapter(BaseTransportAdapter):
@@ -41,15 +36,17 @@ class WebSocketAdapter(BaseTransportAdapter):
             websocket: The WebSocket connection
             handler_class: The handler class to use
         """
-        if not WEBSOCKETS_AVAILABLE:
-            raise ImportError("WebSockets support not available")
-        
         super().__init__(handler_class)
         self.websocket = websocket
         self.reader = WebSocketReader(websocket)
         self.writer = WebSocketWriter(websocket)
         self.handler = None
         self.addr = websocket.remote_address
+
+        # You can default to "telnet" or "simple" here, or let your server set it.
+        # For a "plain" WebSocket scenario, your server might do `adapter.mode = "simple"`.
+        # For a Telnet-over-WebSocket scenario, `adapter.mode = "telnet"`.
+        self.mode = "telnet"  # Default; set to "simple" if you want no negotiation.
     
     async def handle_client(self) -> None:
         """
@@ -61,11 +58,13 @@ class WebSocketAdapter(BaseTransportAdapter):
         # Create the handler
         self.handler = self.handler_class(self.reader, self.writer)
         
-        # Set server reference if available
+        # If a server is set, also attach it to the handler
         if self.server:
             self.handler.server = self.server
         
-        # Handle the client
+        # IMPORTANT: Set the handler's mode to the adapter's mode
+        self.handler.mode = self.mode
+        
         try:
             await self.handler.handle_client()
         except ConnectionClosed as e:
@@ -85,7 +84,6 @@ class WebSocketAdapter(BaseTransportAdapter):
         if self.handler and hasattr(self.handler, 'send_line'):
             await self.handler.send_line(message)
         else:
-            # Fallback if handler not available or doesn't have send_line
             try:
                 await self.writer.write((message + '\r\n').encode('utf-8'))
                 await self.writer.drain()
