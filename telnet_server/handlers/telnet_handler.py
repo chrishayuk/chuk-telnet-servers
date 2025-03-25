@@ -73,8 +73,11 @@ class TelnetHandler(LineHandler):
         try:
             await self.on_connect()
             
-            # Negotiate terminal settings
-            await self._send_initial_negotiations()
+            # Only perform negotiation if we're not in "simple" mode.
+            if getattr(self, 'mode', 'telnet') != "simple":
+                await self._send_initial_negotiations()
+            else:
+                logger.debug("Skipping negotiation in simple mode.")
             
             # Send welcome message
             await self.send_welcome()
