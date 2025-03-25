@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+# telnet_server/transports/websocket/ws_adapter.py
+"""
+WebSocket Transport Adapter
+
+This module provides a transport adapter for WebSocket connections,
+bridging between WebSocket clients and the telnet server handlers.
+"""
+import asyncio
+import logging
+from typing import Optional, Type
+from websockets.server import WebSocketServerProtocol
+from websockets.exceptions import ConnectionClosed
+
+# Import base handler and adapter interfaces
+from telnet_server.handlers.base_handler import BaseHandler
+from telnet_server.transports.transport_adapter import BaseTransportAdapter
+from telnet_server.transports.websocket.ws_reader import WebSocketReader
+from telnet_server.transports.websocket.ws_writer import WebSocketWriter
+
+# websockets are available
+WEBSOCKETS_AVAILABLE = True
+
+# Configure logging
+logger = logging.getLogger('websocket-adapter')
+
+class WebSocketAdapter(BaseTransportAdapter):
+    """
+    Transport adapter for WebSocket connections.
+    
+    This class adapts WebSocket connections to work with the telnet
+    server handlers, implementing the necessary bridging logic.
+    """
+    
+    def __init__(self, websocket: WebSocketServerProtocol, 
+                 handler_class: Type[BaseHandler]):
+        """
+        Initialize the WebSocket adapter.
+        
+        Args:
+            websocket: The WebSocket connection
+            handler_class: The handler class to use
+        """
+        if not WEBSOCKETS_AVAILABLE:
+            raise ImportError("WebSockets support not available")
+        
+        super().__init__(handler_class)
+        self.websocket = websocket
+        self.reader = WebSocketReader(websocket)
+        self.writer = WebSocketWriter(websocket)
+        self.handler = None
+        self.addr = websocket.remote_address
+    
+    async def handle_client(self) -> None:
+        """
+        Handle a WebSocket client connection.
+        
+        This method creates a handler instance for the client and
+        delegates to its handle_client method.
+        """
+        # Create the handler
+        self.handler = self.handler_class(self.reader, self.writer)
+        
+        # Set server reference if available
+        if self.server:
+            self.handler.server = self.server
+        
+        # Handle the client
+        try:
+            await self.handler.handle_client()
+        except ConnectionClosed as e:
+            logger.info(f"WebSocket connection closed: {e}")
+        except Exception as e:
+            logger.error(f"Error handling WebSocket client: {e}")
+            # Re-raise to allow the server to handle it
+            raise
+    
+    async def send_line(self, message: str) -> None:
+        """
+        Send a line of text to the client.
+        
+        Args:
+            message: The message to send
+        """
+        if self.handler and hasattr(self.handler, 'send_line'):
+            await self.handler.send_line(message)
+        else:
+            # Fallback if handler not available or doesn't have send_line
+            try:
+                await self.writer.write((message + '\r\n').encode('utf-8'))
+                await self.writer.drain()
+            except Exception as e:
+                logger.error(f"Error sending message to WebSocket client: {e}")
+    
+    async def close(self) -> None:
+        """Close the WebSocket connection."""
+        try:
+            if self.handler and hasattr(self.handler, 'cleanup'):
+                await self.handler.cleanup()
+            
+            self.writer.close()
+            await self.writer.wait_closed()
+        except Exception as e:
+            logger.error(f"Error closing WebSocket adapter: {e}")

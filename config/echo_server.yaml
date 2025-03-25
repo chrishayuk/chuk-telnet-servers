@@ -1,10 +1,26 @@
-# config/echo_server.yaml
 # Echo Server Configuration
+# This configuration supports both Telnet and WebSocket transports
+
+# Common settings
 host: 0.0.0.0
 port: 8023
 handler_class: sample_servers.echo_server:EchoTelnetHandler
 
-# Optional additional configuration
+# Transport settings
+# Set transport to 'telnet' or 'websocket' to choose the transport type
+transport: telnet
+
+# WebSocket-specific settings (used when transport is 'websocket')
+ws_path: /telnet
+use_ssl: false
+ssl_cert: ""
+ssl_key: ""
+allow_origins:
+  - "*"
+ping_interval: 30
+ping_timeout: 10
+
+# General server settings
 max_connections: 100
 connection_timeout: 300
-welcome_message: "Welcome to the Echo Telnet Server!"
+welcome_message: "Welcome to the Echo Server! This server supports both Telnet and WebSocket transports."

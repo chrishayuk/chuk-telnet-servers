@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 # telnet_server/server_launcher.py
 """
-Generic Telnet Server Launcher
+Universal Server Launcher
 
 This module provides a flexible, configuration-driven approach to launching 
-Telnet servers. It supports dynamic handler loading, configuration file parsing,
-and provides a universal entry point for different types of Telnet servers.
+servers with different transport protocols. It supports dynamic handler loading,
+configuration file parsing, and provides a universal entry point for different
+types of servers and transport protocols.
 
 Key Features:
+- Support for multiple transport protocols (Telnet, WebSocket, etc.)
 - Dynamic handler class loading
 - YAML configuration support
 - Configurable logging levels
@@ -21,11 +23,19 @@ import importlib
 import logging
 import sys
 import os
-from typing import Type, Dict, Any, Optional
+from typing import Type, Dict, Any, Optional, Union
 
-# Import the updated server and base handler
-from telnet_server.server import TelnetServer
+# Import base classes
 from telnet_server.handlers.base_handler import BaseHandler
+
+# Import transport constants
+# These are explicitly defined here to avoid circular imports
+TRANSPORT_TELNET = "telnet"
+TRANSPORT_WEBSOCKET = "websocket"
+SUPPORTED_TRANSPORTS = [TRANSPORT_TELNET, TRANSPORT_WEBSOCKET]
+
+# Import server classes
+from telnet_server.server import TelnetServer
 
 def setup_logging(verbosity: int = 1) -> None:
     """
@@ -58,7 +68,7 @@ def setup_logging(verbosity: int = 1) -> None:
 
 def load_handler_class(handler_path: str) -> Type[BaseHandler]:
     """
-    Dynamically load a Telnet protocol handler class from a string path.
+    Dynamically load a protocol handler class from a string path.
     
     The handler path follows the format: 'module.submodule:ClassName'
     
@@ -92,59 +102,114 @@ def load_handler_class(handler_path: str) -> Type[BaseHandler]:
         # Provide a detailed error message for troubleshooting
         raise ValueError(f"Could not load handler class '{handler_path}': {e}")
 
-def prepare_server_kwargs(config: Dict[str, Any]) -> Dict[str, Any]:
+def create_server_instance(
+    handler_class: Type[BaseHandler],
+    config: Dict[str, Any]
+) -> Union[TelnetServer, Any]:
     """
-    Prepare additional server configuration parameters.
-    
-    Filters out standard configuration keys to allow custom server attributes.
+    Create a server instance based on the configuration.
     
     Args:
-        config: Full configuration dictionary
-    
+        handler_class: The handler class to use
+        config: Server configuration including transport type
+        
     Returns:
-        Additional server configuration parameters
+        A configured server instance
+        
+    Raises:
+        ValueError: If the transport type is invalid or required modules are missing
     """
-    # Remove standard keys to allow custom server configuration
-    standard_keys = {'host', 'port', 'handler_class'}
-    return {k: v for k, v in config.items() if k not in standard_keys}
-
-async def run_server(
-    handler_class: Type[BaseHandler], 
-    host: str, 
-    port: int, 
-    server_kwargs: Optional[Dict[str, Any]] = None
-) -> None:
-    """
-    Create and run a Telnet server with the specified handler.
+    # Get server configuration
+    host = config.get('host', '0.0.0.0')
+    port = config.get('port', 8023)
+    transport = config.get('transport', TRANSPORT_TELNET)
     
-    This function sets up the server, applies any additional configuration,
-    and starts the server asynchronously.
+    # Validate transport type
+    if transport not in SUPPORTED_TRANSPORTS:
+        raise ValueError(f"Unsupported transport: {transport}. "
+                         f"Supported transports: {', '.join(SUPPORTED_TRANSPORTS)}")
+    
+    # Create the server based on transport type
+    if transport == TRANSPORT_TELNET:
+        server = TelnetServer(host, port, handler_class)
+        
+    elif transport == TRANSPORT_WEBSOCKET:
+        # Import WebSocketServer dynamically to avoid import errors
+        # if the websockets package is not installed
+        try:
+            # First try importing from the transports package
+            try:
+                from telnet_server.transports.websocket import WebSocketServer
+            except ImportError:
+                # If that fails, try importing directly from the module
+                from telnet_server.transports.websocket.ws_server import WebSocketServer
+            
+            # Extract WebSocket-specific configuration
+            ws_path = config.get('ws_path', '/telnet')
+            use_ssl = config.get('use_ssl', False)
+            ssl_cert = config.get('ssl_cert')
+            ssl_key = config.get('ssl_key')
+            ping_interval = config.get('ping_interval', 30)
+            ping_timeout = config.get('ping_timeout', 10)
+            allow_origins = config.get('allow_origins', ['*'])
+            
+            # Create WebSocket server with SSL if configured
+            if use_ssl and ssl_cert and ssl_key:
+                server = WebSocketServer(
+                    host, port, handler_class,
+                    path=ws_path,
+                    ssl_cert=ssl_cert,
+                    ssl_key=ssl_key,
+                    ping_interval=ping_interval,
+                    ping_timeout=ping_timeout,
+                    allow_origins=allow_origins
+                )
+            else:
+                server = WebSocketServer(
+                    host, port, handler_class,
+                    path=ws_path,
+                    ping_interval=ping_interval,
+                    ping_timeout=ping_timeout,
+                    allow_origins=allow_origins
+                )
+                
+        except ImportError as e:
+            raise ImportError(
+                f"Could not create WebSocket server: {e}. "
+                "WebSocket transport requires the 'websockets' package. "
+                "Install it with: pip install websockets"
+            )
+    else:
+        # This should never happen due to earlier validation
+        raise ValueError(f"Unsupported transport: {transport}")
+    
+    # Apply any additional server attributes
+    excluded_keys = {'host', 'port', 'handler_class', 'transport', 
+                    'ws_path', 'use_ssl', 'ssl_cert', 'ssl_key',
+                    'ping_interval', 'ping_timeout', 'allow_origins'}
+    
+    for key, value in config.items():
+        if key not in excluded_keys:
+            try:
+                setattr(server, key, value)
+                logging.debug(f"Set server attribute: {key} = {value}")
+            except AttributeError:
+                logging.warning(f"Could not set server attribute: {key}")
+    
+    return server
+
+async def run_server(server: Union[TelnetServer, Any]) -> None:
+    """
+    Run a server instance.
     
     Args:
-        handler_class: Handler class to use
-        host: Host address to bind to
-        port: Port number to listen on
-        server_kwargs: Additional server configuration
+        server: The server instance to run
     """
-    # Default to empty dictionary if no kwargs provided
-    server_kwargs = server_kwargs or {}
-    
-    # Create the server instance
-    server = TelnetServer(host, port, handler_class)
-    
-    # Apply any additional server attributes from configuration
-    for key, value in server_kwargs.items():
-        try:
-            setattr(server, key, value)
-        except AttributeError:
-            logging.warning(f"Could not set server attribute {key}")
-    
-    # Start the server
     await server.start_server()
 
 def main():
     """
-    Main entry point for the Telnet server launcher.
+    Main entry point for the server launcher.
     
     Handles:
     - Command-line argument parsing
@@ -157,8 +222,8 @@ def main():
     """
     # Create argument parser
     parser = argparse.ArgumentParser(
-        description='Flexible Telnet Server Launcher',
-        epilog='Launch Telnet servers with ease!'
+        description='Universal Server Launcher',
+        epilog='Launch servers with different transport protocols'
     )
     
     # Mutually exclusive group for handler specification
@@ -176,7 +241,7 @@ def main():
         help='Path to YAML configuration file'
     )
     
-    # Additional server configuration options
+    # Server configuration options
     parser.add_argument(
         '--host', 
         type=str, 
@@ -188,6 +253,13 @@ def main():
         type=int, 
         default=8023, 
         help='Port to listen on (default: 8023)'
+    )
+    parser.add_argument(
+        '--transport',
+        type=str,
+        choices=SUPPORTED_TRANSPORTS,
+        default=TRANSPORT_TELNET,
+        help=f'Transport protocol to use (default: {TRANSPORT_TELNET})'
     )
     parser.add_argument(
         '-v', '--verbose', 
@@ -218,25 +290,36 @@ def main():
             # Get handler class from configuration
             handler_class = load_handler_class(config['handler_class'])
             
-            # Determine host and port, with command-line args taking precedence
-            host = args.host if args.host != '0.0.0.0' else config.get('host', '0.0.0.0')
-            port = args.port if args.port != 8023 else config.get('port', 8023)
+            # Command-line args take precedence over config file
+            if args.host != '0.0.0.0':
+                config['host'] = args.host
+            if args.port != 8023:
+                config['port'] = args.port
+            if args.transport != TRANSPORT_TELNET:
+                config['transport'] = args.transport
             
-            # Prepare additional server configuration
-            server_kwargs = prepare_server_kwargs(config)
+            # Validate the configuration
+            ServerConfig.validate_config(config)
         
         else:
-            # Load handler class from command line
+            # Use command-line arguments
             handler_class = load_handler_class(args.handler)
-            host = args.host
-            port = args.port
-            server_kwargs = {}
+            config = {
+                'host': args.host,
+                'port': args.port,
+                'transport': args.transport
+            }
+        
+        # Create the server instance
+        server = create_server_instance(handler_class, config)
         
         # Log server startup details
-        logger.info(f"Starting server with {handler_class.__name__} on {host}:{port}")
+        transport_name = config.get('transport', TRANSPORT_TELNET).upper()
+        logger.info(f"Starting {transport_name} server with {handler_class.__name__} "
+                  f"on {config.get('host', '0.0.0.0')}:{config.get('port', 8023)}")
         
         # Run the server
-        asyncio.run(run_server(handler_class, host, port, server_kwargs))
+        asyncio.run(run_server(server))
     
     except KeyboardInterrupt:
         # Graceful handling of Ctrl-C

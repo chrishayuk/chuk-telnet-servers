@@ -9,16 +9,16 @@ with proper connection lifecycle management and graceful shutdown.
 """
 import asyncio
 import logging
-import signal
-from typing import Dict, Any, Optional, Set, List, Callable, Awaitable, Type
+from typing import Dict, Any, Optional, Set, List, Type
 
-# Import the protocol handler - updated for new architecture
+# Import the protocol handler and base server
 from telnet_server.handlers.base_handler import BaseHandler
+from telnet_server.transports.base_server import BaseServer
 
 # Configure logging
 logger = logging.getLogger('telnet-server')
 
-class TelnetServer:
+class TelnetServer(BaseServer):
     """
     Telnet server with connection handling capabilities.
     
@@ -37,12 +37,7 @@ class TelnetServer:
             port: Port number to listen on
             handler_class: Handler class to use for client connections
         """
-        self.host = host
-        self.port = port
-        self.handler_class = handler_class
-        self.server = None
-        self.active_connections: Set[BaseHandler] = set()
-        self.running = True
+        super().__init__(host, port, handler_class)
     
     async def start_server(self) -> None:
         """
@@ -56,8 +51,8 @@ class TelnetServer:
             ValueError: If no handler class was provided
             Exception: If an error occurs while starting the server
         """
-        if not self.handler_class:
-            raise ValueError("Handler class must be provided")
+        # Call the base implementation to validate handler class
+        await super().start_server()
         
         try:
             self.server = await asyncio.start_server(
@@ -65,14 +60,6 @@ class TelnetServer:
                 self.host,
                 self.port
             )
-            
-            # Set up signal handlers for graceful shutdown
-            loop = asyncio.get_running_loop()
-            for sig in (signal.SIGINT, signal.SIGTERM):
-                loop.add_signal_handler(
-                    sig, 
-                    lambda: asyncio.create_task(self.shutdown())
-                )
             
             addr = self.server.sockets[0].getsockname()
             logger.info(f"Telnet server running on {addr[0]}:{addr[1]}")
@@ -189,40 +176,22 @@ class TelnetServer:
             self.server.close()
             await self.server.wait_closed()
         
-        # Signal all handlers to stop
-        self.running = False
+        # Call base class implementation to handle common shutdown tasks
+        await super().shutdown()
         
-        # Send shutdown message to all clients
-        shutdown_tasks = []
-        for handler in list(self.active_connections):
-            try:
-                handler.running = False
-                if hasattr(handler, 'send_line'):
-                    shutdown_tasks.append(asyncio.create_task(
-                        handler.send_line("\nServer is shutting down. Goodbye!")
-                    ))
-            except Exception:
-                pass
+        logger.info("Telnet server has shut down.")
+    
+    async def _force_close_connections(self) -> None:
+        """
+        Force close all remaining connections.
         
-        # Wait for shutdown messages to be sent
-        if shutdown_tasks:
-            await asyncio.gather(*shutdown_tasks, return_exceptions=True)
-        
-        # Wait for connections to close (with timeout)
-        wait_time = 5  # seconds
-        for i in range(wait_time):
-            if not self.active_connections:
-                break
-            logger.info(f"Waiting for connections to close: {len(self.active_connections)} remaining ({wait_time-i}s)")
-            await asyncio.sleep(1)
-        
-        # Force close any remaining connections
+        This method forcibly closes any connections that didn't
+        close gracefully during shutdown.
+        """
         for handler in list(self.active_connections):
             try:
                 if hasattr(handler, 'writer'):
                     handler.writer.close()
                 self.active_connections.remove(handler)
-            except Exception:
-                pass
-        
-        logger.info("Telnet server has shut down.")
+            except Exception as e:
+                logger.error(f"Error force closing connection: {e}")
