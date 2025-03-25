@@ -35,6 +35,7 @@ class BaseHandler:
         self.addr = writer.get_extra_info('peername')
         self.running = True
         self.server = None  # Can be set by the server after creation
+        self.session_ended = False  # Flag to indicate the session was ended by handler
     
     async def handle_client(self) -> None:
         """
@@ -110,6 +111,30 @@ class BaseHandler:
         except Exception as e:
             logger.error(f"Error reading raw data from {self.addr}: {e}")
             raise
+    
+    async def end_session(self, message: Optional[str] = None) -> None:
+        """
+        End the client session gracefully.
+        
+        This method sets the session_ended flag and optionally sends a final message.
+        It should be called when the handler decides to end the session, such as
+        after a 'quit' command.
+        
+        Args:
+            message: Optional final message to send before ending the session.
+        """
+        try:
+            if message:
+                if hasattr(self, 'send_line'):
+                    await self.send_line(message)
+                else:
+                    await self.send_raw((message + "\r\n").encode('utf-8'))
+            
+            self.session_ended = True
+            self.running = False
+            
+        except Exception as e:
+            logger.error(f"Error during session end for {self.addr}: {e}")
     
     async def cleanup(self) -> None:
         """

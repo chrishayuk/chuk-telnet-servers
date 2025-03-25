@@ -47,6 +47,9 @@ class WebSocketAdapter(BaseTransportAdapter):
         # For a "plain" WebSocket scenario, your server might do `adapter.mode = "simple"`.
         # For a Telnet-over-WebSocket scenario, `adapter.mode = "telnet"`.
         self.mode = "telnet"  # Default; set to "simple" if you want no negotiation.
+        
+        # Custom welcome message that can be passed from the server
+        self.welcome_message = None
     
     async def handle_client(self) -> None:
         """
@@ -58,12 +61,16 @@ class WebSocketAdapter(BaseTransportAdapter):
         # Create the handler
         self.handler = self.handler_class(self.reader, self.writer)
         
-        # If a server is set, also attach it to the handler
+        # If a server is set, also attach it to the server
         if self.server:
             self.handler.server = self.server
         
         # IMPORTANT: Set the handler's mode to the adapter's mode
         self.handler.mode = self.mode
+        
+        # Pass welcome message if available and the handler supports it
+        if self.welcome_message and hasattr(self.handler, 'welcome_message'):
+            self.handler.welcome_message = self.welcome_message
         
         try:
             await self.handler.handle_client()

@@ -31,11 +31,7 @@ class TCPServer(BaseServer):
     async def start_server(self) -> None:
         await super().start_server()
         try:
-            self.server = await asyncio.start_server(
-                self.handle_new_connection,
-                self.host,
-                self.port
-            )
+            self.server = await self._create_server()
             addr = self.server.sockets[0].getsockname()
             logger.info(f"TCP server running on {addr[0]}:{addr[1]}")
             async with self.server:
@@ -44,66 +40,31 @@ class TCPServer(BaseServer):
             logger.error(f"Error starting TCP server: {e}")
             raise
     
-    async def handle_new_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        # Directly create the handler without reading any initial data.
-        handler = self.handler_class(reader, writer)
-        handler.server = self
-        handler.mode = "simple"          # Set mode to simple, bypassing negotiation.
-        handler.initial_data = b""
-        self.active_connections.add(handler)
+    async def _create_server(self) -> asyncio.Server:
+        """
+        Create the asyncio server instance.
         
-        try:
-            await self.handle_client(handler)
-        except Exception as e:
-            addr = getattr(handler, 'addr', 'unknown')
-            logger.error(f"Error handling TCP client {addr}: {e}")
-        finally:
-            try:
-                await self.cleanup_connection(handler)
-                writer.close()
-                try:
-                    await asyncio.wait_for(writer.wait_closed(), timeout=5.0)
-                except Exception:
-                    pass
-            except Exception as e:
-                logger.error(f"Error cleaning up TCP client connection: {e}")
-            if handler in self.active_connections:
-                self.active_connections.remove(handler)
+        Returns:
+            The asyncio server instance
+        """
+        return await asyncio.start_server(
+            self.handle_new_connection,
+            self.host,
+            self.port
+        )
     
-    async def handle_client(self, handler: BaseHandler) -> None:
-        if hasattr(handler, 'handle_client'):
-            await handler.handle_client()
-        else:
-            raise NotImplementedError("Handler must implement handle_client method")
-    
-    async def cleanup_connection(self, handler: BaseHandler) -> None:
-        if hasattr(handler, 'cleanup'):
-            await handler.cleanup()
-    
-    async def send_global_message(self, message: str) -> None:
-        send_tasks = []
-        for handler in self.active_connections:
-            try:
-                if hasattr(handler, 'send_line'):
-                    send_tasks.append(asyncio.create_task(handler.send_line(message)))
-            except Exception as e:
-                logger.error(f"Error preparing to send message to TCP client: {e}")
-        if send_tasks:
-            await asyncio.gather(*send_tasks, return_exceptions=True)
-    
-    async def shutdown(self) -> None:
-        logger.info("Shutting down TCP server...")
-        if self.server:
-            self.server.close()
-            await self.server.wait_closed()
-        await super().shutdown()
-        logger.info("TCP server has shut down.")
-    
-    async def _force_close_connections(self) -> None:
-        for handler in list(self.active_connections):
-            try:
-                if hasattr(handler, 'writer'):
-                    handler.writer.close()
-                self.active_connections.remove(handler)
-            except Exception as e:
-                logger.error(f"Error force closing TCP connection: {e}")
+    def create_handler(self, reader, writer) -> BaseHandler:
+        """
+        Create a handler instance with mode set to "simple".
+        
+        Args:
+            reader: The stream reader for the client
+            writer: The stream writer for the client
+            
+        Returns:
+            The created handler instance
+        """
+        handler = super().create_handler(reader, writer)
+        handler.mode = "simple"  # Set mode to simple, bypassing negotiation
+        handler.initial_data = b""
+        return handler

@@ -1,5 +1,36 @@
 # config/guess_who_server.yaml
-# Guess Who Server Configuration
-host: 0.0.0.0
-port: 8023
-handler_class: sample_servers.guess_who_server:GuessWhoHandler
+# Guess Who Server Configuration - Multi-Transport
+
+servers:
+  telnet:
+    host: "0.0.0.0"
+    port: 8043
+    transport: "telnet"
+    handler_class: "sample_servers.guess_who_server:GuessWhoHandler"
+    max_connections: 50
+    connection_timeout: 600  # Longer timeout for game sessions
+    welcome_message: "Welcome to Guess Who (Telnet)! Can you guess the mystery person?"
+
+  tcp:
+    host: "0.0.0.0"
+    port: 8044
+    transport: "tcp"
+    handler_class: "sample_servers.guess_who_server:GuessWhoHandler"
+    max_connections: 50
+    connection_timeout: 600
+    welcome_message: "Welcome to Guess Who (TCP)! Can you guess the mystery person?"
+
+  websocket:
+    host: "0.0.0.0"
+    port: 8045
+    transport: "websocket"
+    ws_path: "/guess-who"
+    handler_class: "sample_servers.guess_who_server:GuessWhoHandler"
+    use_ssl: false
+    allow_origins:
+      - "*"
+    ping_interval: 30
+    ping_timeout: 10
+    max_connections: 50
+    connection_timeout: 600
+    welcome_message: "Welcome to Guess Who (WebSocket)! Can you guess the mystery person?"

@@ -10,8 +10,7 @@ like a Telnet connection.
 
 import asyncio
 import logging
-import ssl
-from typing import Type, List
+from typing import Type, List, Optional
 
 import websockets
 from websockets.server import WebSocketServerProtocol
@@ -33,11 +32,11 @@ class WSTelnetServer(BaseWebSocketServer):
         port: int = 8026,
         handler_class: Type[BaseHandler] = None,
         path: str = '/ws_telnet',
-        ssl_cert: str = None,
-        ssl_key: str = None,
         ping_interval: int = 30,
         ping_timeout: int = 10,
-        allow_origins: List[str] = None
+        allow_origins: Optional[List[str]] = None,
+        ssl_cert: Optional[str] = None,
+        ssl_key: Optional[str] = None
     ):
         """
         Initialize the WebSocket Telnet server.
@@ -47,23 +46,24 @@ class WSTelnetServer(BaseWebSocketServer):
             port: Port number to listen on.
             handler_class: The handler class to handle Telnet negotiation and data.
             path: The WebSocket path (default /ws_telnet).
-            ssl_cert: Path to SSL certificate (optional).
-            ssl_key: Path to SSL key (optional).
             ping_interval: Interval in seconds for WebSocket pings.
             ping_timeout: Timeout in seconds for WebSocket pings.
             allow_origins: List of allowed origins for CORS checks (default: ['*']).
+            ssl_cert: Path to SSL certificate (optional).
+            ssl_key: Path to SSL key (optional).
         """
-        super().__init__(host, port, handler_class, ping_interval, ping_timeout, allow_origins)
+        super().__init__(
+            host=host, 
+            port=port, 
+            handler_class=handler_class,
+            ping_interval=ping_interval,
+            ping_timeout=ping_timeout,
+            allow_origins=allow_origins,
+            ssl_cert=ssl_cert,
+            ssl_key=ssl_key
+        )
         self.path = path
-        self.ssl_cert = ssl_cert
-        self.ssl_key = ssl_key
         self.transport = "ws_telnet"
-        self.ssl_context = None
-        if ssl_cert and ssl_key:
-            import ssl
-            self.ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-            self.ssl_context.load_cert_chain(ssl_cert, ssl_key)
-            logger.info(f"SSL enabled with cert: {ssl_cert}")
 
     async def _connection_handler(self, websocket: WebSocketServerProtocol):
         """
@@ -72,6 +72,12 @@ class WSTelnetServer(BaseWebSocketServer):
         This checks the requested path, optionally performs CORS checks,
         and then uses a WebSocketAdapter to invoke the Telnet handler logic.
         """
+        # Reject connection if we're at max connections
+        if self.max_connections and len(self.active_connections) >= self.max_connections:
+            logger.warning(f"Maximum connections ({self.max_connections}) reached, rejecting WebSocket connection")
+            await websocket.close(code=1008, reason="Server at capacity")
+            return
+            
         # Validate the WebSocket path.
         try:
             raw_path = websocket.request.path
@@ -104,9 +110,31 @@ class WSTelnetServer(BaseWebSocketServer):
         adapter = WebSocketAdapter(websocket, self.handler_class)
         adapter.server = self
         # In ws_telnet mode, do NOT set mode to 'simple'; let Telnet negotiation proceed.
+        adapter.mode = "telnet"
+        
+        # Pass welcome message if configured
+        if self.welcome_message:
+            adapter.welcome_message = self.welcome_message
+            
         self.active_connections.add(adapter)
         try:
-            await adapter.handle_client()
+            # If connection_timeout is set, create a timeout wrapper
+            if self.connection_timeout:
+                try:
+                    await asyncio.wait_for(adapter.handle_client(), timeout=self.connection_timeout)
+                except asyncio.TimeoutError:
+                    logger.info(f"Connection timeout ({self.connection_timeout}s) for {adapter.addr}")
+            else:
+                await adapter.handle_client()
+                
+            # Check if the session was ended by the handler (e.g., quit command)
+            if hasattr(adapter.handler, 'session_ended') and adapter.handler.session_ended:
+                # The session was explicitly ended by the handler
+                logger.debug(f"WS Telnet: Session ended for {adapter.addr}")
+                # Ensure the WebSocket is properly closed
+                if not websocket.closed:
+                    await websocket.close(1000, "Session ended")
+                    
         except ConnectionClosed as e:
             logger.info(f"WS Telnet: Connection closed: {e}")
         except Exception as e:

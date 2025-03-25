@@ -42,14 +42,14 @@ class TelnetServer(BaseServer):
             handler_class: Handler class to use for client connections
         """
         super().__init__(host, port, handler_class)
+        self.transport = "telnet"
     
     async def start_server(self) -> None:
         """
         Start the telnet server.
         
         This method starts the server listening for connections
-        on the specified host and port, and sets up signal handlers
-        for graceful shutdown.
+        on the specified host and port.
         
         Raises:
             ValueError: If no handler class was provided
@@ -59,11 +59,7 @@ class TelnetServer(BaseServer):
         await super().start_server()
         
         try:
-            self.server = await asyncio.start_server(
-                self.handle_new_connection,
-                self.host,
-                self.port
-            )
+            self.server = await self._create_server()
             
             addr = self.server.sockets[0].getsockname()
             logger.info(f"Telnet server running on {addr[0]}:{addr[1]}")
@@ -74,8 +70,21 @@ class TelnetServer(BaseServer):
             logger.error(f"Error starting telnet server: {e}")
             raise
     
+    async def _create_server(self) -> asyncio.Server:
+        """
+        Create the asyncio server instance.
+        
+        Returns:
+            The asyncio server instance
+        """
+        return await asyncio.start_server(
+            self.handle_new_connection,
+            self.host,
+            self.port
+        )
+    
     async def handle_new_connection(self, reader: asyncio.StreamReader, 
-                                    writer: asyncio.StreamWriter) -> None:
+                                   writer: asyncio.StreamWriter) -> None:
         """
         Handle a new client connection.
         
@@ -98,126 +107,16 @@ class TelnetServer(BaseServer):
             negotiation_mode = "simple"
         else:
             if not initial_data or initial_data[0] != IAC:
-                # Data does not start with the IAC byte, so negotiation likely won’t occur
+                # Data does not start with the IAC byte, so negotiation likely won't occur
                 negotiation_mode = "simple"
         
         logger.debug(f"Detected connection mode: {negotiation_mode}")
         
         # Create handler and store the initial data and mode.
-        handler = self.handler_class(reader, writer)
-        handler.server = self  # Set reference to server
+        handler = self.create_handler(reader, writer)
         # Attach the detected mode and any initial data (if you want to process it later)
         handler.mode = negotiation_mode
         handler.initial_data = initial_data
         
-        # Add to active connections
-        self.active_connections.add(handler)
-        
-        try:
-            # Delegate client handling to the handler's logic.
-            # For instance, if handler.mode == "simple", it may bypass full negotiation.
-            await self.handle_client(handler)
-        except Exception as e:
-            addr = getattr(handler, 'addr', 'unknown')
-            logger.error(f"Error handling client {addr}: {e}")
-        finally:
-            # Clean up the connection
-            try:
-                await self.cleanup_connection(handler)
-                writer.close()
-                try:
-                    await asyncio.wait_for(writer.wait_closed(), timeout=5.0)
-                except Exception:
-                    pass
-            except Exception as e:
-                logger.error(f"Error cleaning up client connection: {e}")
-            
-            # Remove from active connections
-            if handler in self.active_connections:
-                self.active_connections.remove(handler)
-    
-    async def handle_client(self, handler: BaseHandler) -> None:
-        """
-        Handle a client using the handler.
-        
-        This method delegates client handling to the handler's
-        handle_client method.
-        
-        Args:
-            handler: The handler for the client
-            
-        Raises:
-            NotImplementedError: If the handler doesn't implement handle_client
-        """
-        if hasattr(handler, 'handle_client'):
-            await handler.handle_client()
-        else:
-            raise NotImplementedError("Handler must implement handle_client method")
-    
-    async def cleanup_connection(self, handler: BaseHandler) -> None:
-        """
-        Clean up a connection.
-        
-        This method delegates connection cleanup to the handler's
-        cleanup method.
-        
-        Args:
-            handler: The handler for the client
-        """
-        if hasattr(handler, 'cleanup'):
-            await handler.cleanup()
-    
-    async def send_global_message(self, message: str) -> None:
-        """
-        Send a message to all connected clients.
-        
-        This method sends a message to all active connections,
-        which can be useful for broadcasts or server-wide notifications.
-        
-        Args:
-            message: The message to send
-        """
-        send_tasks = []
-        for handler in self.active_connections:
-            try:
-                if hasattr(handler, 'send_line'):
-                    send_tasks.append(asyncio.create_task(handler.send_line(message)))
-            except Exception as e:
-                logger.error(f"Error preparing to send message to client: {e}")
-        
-        if send_tasks:
-            await asyncio.gather(*send_tasks, return_exceptions=True)
-    
-    async def shutdown(self) -> None:
-        """
-        Gracefully shut down the server.
-        
-        This method stops accepting new connections, notifies all
-        clients of the shutdown, and closes all active connections.
-        """
-        logger.info("Shutting down telnet server...")
-        
-        # Stop accepting new connections
-        if self.server:
-            self.server.close()
-            await self.server.wait_closed()
-        
-        # Call base class implementation to handle common shutdown tasks
-        await super().shutdown()
-        
-        logger.info("Telnet server has shut down.")
-    
-    async def _force_close_connections(self) -> None:
-        """
-        Force close all remaining connections.
-        
-        This method forcibly closes any connections that didn't
-        close gracefully during shutdown.
-        """
-        for handler in list(self.active_connections):
-            try:
-                if hasattr(handler, 'writer'):
-                    handler.writer.close()
-                self.active_connections.remove(handler)
-            except Exception as e:
-                logger.error(f"Error force closing connection: {e}")
+        # Continue with standard connection handling
+        await super().handle_new_connection(reader, writer)

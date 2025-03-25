@@ -29,7 +29,7 @@ class PlainWebSocketServer(BaseWebSocketServer):
     def __init__(
         self,
         host: str = '0.0.0.0',
-        port: int = 8023,
+        port: int = 8025,
         handler_class: Type[BaseHandler] = None,
         path: str = '/ws',
         ping_interval: int = 30,
@@ -55,6 +55,12 @@ class PlainWebSocketServer(BaseWebSocketServer):
         """
         Handle a WebSocket connection in plain text mode.
         """
+        # Reject connection if we're at max connections
+        if self.max_connections and len(self.active_connections) >= self.max_connections:
+            logger.warning(f"Maximum connections ({self.max_connections}) reached, rejecting WebSocket connection")
+            await websocket.close(code=1008, reason="Server at capacity")
+            return
+            
         # Validate request path
         try:
             raw_path = websocket.request.path
@@ -87,9 +93,30 @@ class PlainWebSocketServer(BaseWebSocketServer):
         adapter = WebSocketAdapter(websocket, self.handler_class)
         adapter.server = self
         adapter.mode = "simple"
+        
+        # Pass welcome message if configured
+        if self.welcome_message:
+            adapter.welcome_message = self.welcome_message
+            
         self.active_connections.add(adapter)
         try:
-            await adapter.handle_client()
+            # If connection_timeout is set, create a timeout wrapper
+            if self.connection_timeout:
+                try:
+                    await asyncio.wait_for(adapter.handle_client(), timeout=self.connection_timeout)
+                except asyncio.TimeoutError:
+                    logger.info(f"Connection timeout ({self.connection_timeout}s) for {adapter.addr}")
+            else:
+                await adapter.handle_client()
+            
+            # Check if the session was ended by the handler (e.g., quit command)
+            if hasattr(adapter.handler, 'session_ended') and adapter.handler.session_ended:
+                # The session was explicitly ended by the handler
+                logger.debug(f"Plain WS: Session ended for {adapter.addr}")
+                # Ensure the WebSocket is properly closed
+                if not websocket.closed:
+                    await websocket.close(1000, "Session ended")
+                
         except ConnectionClosed as e:
             logger.info(f"Plain WS: Connection closed: {e}")
         except Exception as e:

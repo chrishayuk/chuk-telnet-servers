@@ -51,6 +51,9 @@ class TelnetHandler(LineHandler):
         
         # Buffer for partial IAC commands
         self.iac_buffer = bytearray()
+        
+        # Custom welcome message that can be set by server configuration
+        self.welcome_message = None
     
     async def handle_client(self) -> None:
         """
@@ -282,14 +285,29 @@ class TelnetHandler(LineHandler):
     async def send_welcome(self) -> None:
         """
         Send a welcome message to the client.
+        
+        Uses the custom welcome_message if set, otherwise sends a default message.
         """
-        await self.send_line("Welcome! This server can handle line or character mode.")
+        if self.welcome_message:
+            await self.send_line(self.welcome_message)
+        else:
+            await self.send_line("Welcome! This server can handle line or character mode.")
+        
         await self.show_prompt()
 
     async def process_line(self, line: str) -> bool:
+        """
+        Process a complete line of input.
+        
+        Args:
+            line: The line to process
+            
+        Returns:
+            True to continue processing, False to terminate the connection
+        """
         logger.debug(f"process_line => {line!r}")
         if line.lower() in ['quit', 'exit', 'q']:
-            await self.send_line("Goodbye!")
+            await self.end_session("Goodbye!")
             return False
         await self.send_line(f"Echo: {line}")
         return True

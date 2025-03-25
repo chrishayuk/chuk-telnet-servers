@@ -200,7 +200,7 @@ class CharacterHandler(BaseHandler):
         
         # Check for exit commands
         if command.lower() in ["exit", "quit", "q"]:
-            await self.send_line("Goodbye!")
+            await self.end_session("Goodbye!")
             return False
         
         # Process the command if not empty

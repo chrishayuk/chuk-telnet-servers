@@ -1,260 +1,183 @@
 #!/usr/bin/env python3
 # telnet_server/server_config.py
 """
-Server Configuration Module
+Server Configuration Handler
 
-Helps initialize servers with specific configurations.
-This module provides utilities for loading and validating
-server configurations from YAML files.
+This module provides utilities for loading, validating, and applying 
+server configuration from YAML files or dictionaries. It ensures all required
+parameters are present and provides factory methods for creating server instances.
 """
+
 import os
-import yaml
 import logging
-from typing import Dict, Any, Type, Optional, List, Union
+from typing import Dict, Any, Type, Optional
 
-# Import the default Telnet server and base handler
-from telnet_server.server import TelnetServer
+import yaml
+
 from telnet_server.handlers.base_handler import BaseHandler
-
-# Define transport types
-TRANSPORT_TELNET = "telnet"
-TRANSPORT_TCP = "tcp"
-TRANSPORT_WEBSOCKET = "websocket"
-TRANSPORT_WS_TELNET = "ws_telnet"
-SUPPORTED_TRANSPORTS = [TRANSPORT_TELNET, TRANSPORT_TCP, TRANSPORT_WEBSOCKET, TRANSPORT_WS_TELNET]
+from telnet_server.transports.base_server import BaseServer
+from telnet_server.server import TelnetServer
+from telnet_server.transports.tcp.tcp_server import TCPServer
+from telnet_server.transports.websocket.ws_server_plain import PlainWebSocketServer
+from telnet_server.transports.websocket.ws_telnet_server import WSTelnetServer
 
 logger = logging.getLogger('server-config')
 
+# Define transport constants
+TRANSPORT_TELNET = "telnet"
+TRANSPORT_WEBSOCKET = "websocket"
+TCP_TRANSPORT = "tcp"
+WS_TELNET_TRANSPORT = "ws_telnet"
+
 class ServerConfig:
     """
-    Manages server configuration from YAML files.
-    
-    Provides static methods for loading, validating, and creating server
-    instances based on configuration.
+    Utilities for server configuration management.
     """
     
     @staticmethod
-    def load_config(config_file: str) -> Dict[str, Any]:
+    def load_config(config_path: str) -> Dict[str, Any]:
         """
-        Load configuration from a YAML file.
+        Load a YAML configuration file.
         
-        If the top-level contains 'servers', that mapping is included.
+        Args:
+            config_path: Path to the YAML configuration file
+            
+        Returns:
+            The loaded configuration as a dictionary
+            
+        Raises:
+            FileNotFoundError: If the configuration file is not found
+            Exception: If there's an error parsing the YAML
         """
-        if not os.path.exists(config_file):
-            raise FileNotFoundError(f"Config file not found: {config_file}")
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(f"Configuration file not found: {config_path}")
         
         try:
-            with open(config_file, 'r') as f:
+            with open(config_path, 'r') as f:
                 config = yaml.safe_load(f)
             
-            if not isinstance(config, dict):
-                raise ValueError("Configuration must be a dictionary")
-            
-            # Multi-server support: if "servers" exists, validate each one.
-            if "servers" in config:
-                servers_config = config["servers"]
-                if not isinstance(servers_config, dict):
-                    raise ValueError("The 'servers' key must contain a dictionary of server configurations")
-                for name, server_conf in servers_config.items():
-                    missing = [field for field in ['handler_class'] if field not in server_conf]
-                    if missing:
-                        raise ValueError(f"Missing required config fields for server '{name}': {', '.join(missing)}")
-            else:
-                # Single-server config requires 'handler_class'
-                required_fields = ['handler_class']
-                missing = [field for field in required_fields if field not in config]
-                if missing:
-                    raise ValueError(f"Missing required config fields: {', '.join(missing)}")
-            
-            # Set common default values (these can be overridden per server)
-            if 'host' not in config:
-                config['host'] = '0.0.0.0'
-                logger.info("Using default host: 0.0.0.0")
-            if 'port' not in config:
-                config['port'] = 8023
-                logger.info("Using default port: 8023")
-            if 'transport' not in config:
-                config['transport'] = TRANSPORT_TELNET
-                logger.info(f"Using default transport: {TRANSPORT_TELNET}")
-            elif config['transport'] not in SUPPORTED_TRANSPORTS:
-                raise ValueError(f"Unsupported transport: {config['transport']}. Supported transports: {', '.join(SUPPORTED_TRANSPORTS)}")
-            
-            # Validate port range at the top level
-            port = config.get('port', 8023)
-            if not isinstance(port, int) or port < 1 or port > 65535:
-                raise ValueError(f"Invalid port number: {port}. Must be between 1 and 65535.")
+            if not config:
+                raise ValueError(f"Empty or invalid configuration file: {config_path}")
             
             return config
-        except yaml.YAMLError as e:
-            raise ValueError(f"Error parsing config file: {e}")
+        except Exception as e:
+            logger.error(f"Error loading configuration from {config_path}: {e}")
+            raise
     
     @staticmethod
     def validate_config(config: Dict[str, Any]) -> None:
         """
-        Validate a configuration dictionary.
-        """
-        def _validate_server_conf(server_conf: Dict[str, Any], server_name: Optional[str] = None):
-            handler_class = server_conf.get('handler_class', '')
-            if not isinstance(handler_class, str) or ':' not in handler_class:
-                name_info = f" for server '{server_name}'" if server_name else ""
-                raise ValueError(f"Invalid handler_class format{name_info}: {handler_class}. Expected format: 'module.path:ClassName'")
-            # Validate numeric fields
-            for numeric_field in ['max_connections', 'connection_timeout']:
-                if numeric_field in server_conf:
-                    value = server_conf[numeric_field]
-                    if not isinstance(value, (int, float)) or value <= 0:
-                        raise ValueError(f"{numeric_field} must be a positive number")
-            # Validate transport type
-            transport = server_conf.get('transport', TRANSPORT_TELNET)
-            if transport not in SUPPORTED_TRANSPORTS:
-                raise ValueError(f"Unsupported transport: {transport}. Supported transports: {', '.join(SUPPORTED_TRANSPORTS)}")
-            # Validate WebSocket-specific settings if needed
-            if transport in [TRANSPORT_WEBSOCKET, TRANSPORT_WS_TELNET]:
-                if 'ws_path' not in server_conf:
-                    logger.warning("No WebSocket path specified, using default: '/telnet'")
-                    server_conf['ws_path'] = '/telnet'
-                if server_conf.get('use_ssl', False):
-                    required_ssl_fields = ['ssl_cert', 'ssl_key']
-                    missing = [field for field in required_ssl_fields if field not in server_conf]
-                    if missing:
-                        raise ValueError(f"SSL is enabled but missing required fields: {', '.join(missing)}")
+        Validate a server configuration dictionary.
         
-        if "servers" in config:
-            for name, server_conf in config["servers"].items():
-                _validate_server_conf(server_conf, server_name=name)
-        else:
-            _validate_server_conf(config)
+        Args:
+            config: The configuration dictionary to validate
+            
+        Raises:
+            ValueError: If the configuration is missing required fields
+        """
+        # Check for required fields
+        required_fields = ['transport', 'handler_class']
+        for field in required_fields:
+            if field not in config:
+                raise ValueError(f"Missing required configuration field: {field}")
+        
+        # Validate transport type
+        transport = config['transport']
+        valid_transports = [TRANSPORT_TELNET, TCP_TRANSPORT, TRANSPORT_WEBSOCKET, WS_TELNET_TRANSPORT]
+        if transport not in valid_transports:
+            raise ValueError(f"Invalid transport type: {transport}. Must be one of {valid_transports}")
+        
+        # Validate optional fields based on transport
+        if transport in [TRANSPORT_WEBSOCKET, WS_TELNET_TRANSPORT]:
+            # WebSocket specific validations
+            if config.get('use_ssl', False):
+                if 'ssl_cert' not in config or 'ssl_key' not in config:
+                    raise ValueError("SSL enabled but missing ssl_cert or ssl_key")
     
     @staticmethod
-    def create_server_from_config(
-        config: Dict[str, Any], 
-        handler_class: Type[BaseHandler]
-    ) -> Union[TelnetServer, Any]:
+    def create_server_from_config(config: Dict[str, Any], handler_class: Type[BaseHandler]) -> BaseServer:
         """
-        Create a server instance from the configuration.
+        Create a server instance from a configuration dictionary and a handler class.
+        
+        Args:
+            config: The configuration dictionary
+            handler_class: The handler class to use
+            
+        Returns:
+            The created server instance
+            
+        Raises:
+            ValueError: If the transport type is not supported
         """
+        transport = config['transport']
         host = config.get('host', '0.0.0.0')
         port = config.get('port', 8023)
-        transport = config.get('transport', TRANSPORT_TELNET)
         
         if transport == TRANSPORT_TELNET:
             server = TelnetServer(host, port, handler_class)
-        elif transport == "tcp":
-            try:
-                from telnet_server.transports.tcp.tcp_server import TCPServer
-                server = TCPServer(host, port, handler_class)
-            except ImportError as e:
-                raise ImportError(f"Could not create TCP server: {e}.")
+        elif transport == TCP_TRANSPORT:
+            server = TCPServer(host, port, handler_class)
         elif transport == TRANSPORT_WEBSOCKET:
-            try:
-                from telnet_server.transports.websocket.ws_server_plain import PlainWebSocketServer
-                ws_path = config.get('ws_path', '/telnet')
-                use_ssl = config.get('use_ssl', False)
-                ssl_cert = config.get('ssl_cert', None)
-                ssl_key = config.get('ssl_key', None)
-                ping_interval = config.get('ping_interval', 30)
-                ping_timeout = config.get('ping_timeout', 10)
-                allow_origins = config.get('allow_origins', ['*'])
-                server = PlainWebSocketServer(
-                    host=host, 
-                    port=port, 
-                    handler_class=handler_class,
-                    path=ws_path,
-                    ssl_cert=ssl_cert if use_ssl else None,
-                    ssl_key=ssl_key if use_ssl else None,
-                    ping_interval=ping_interval,
-                    ping_timeout=ping_timeout,
-                    allow_origins=allow_origins
-                )
-            except ImportError as e:
-                raise ImportError(
-                    f"Could not create WebSocket server: {e}. "
-                    "WebSocket transport requires the 'websockets' package. Install it with: pip install websockets"
-                )
-        elif transport == "ws_telnet":
-            try:
-                from telnet_server.transports.websocket.ws_telnet_server import WSTelnetServer
-                ws_path = config.get('ws_path', '/telnet')
-                use_ssl = config.get('use_ssl', False)
-                ssl_cert = config.get('ssl_cert', None)
-                ssl_key = config.get('ssl_key', None)
-                ping_interval = config.get('ping_interval', 30)
-                ping_timeout = config.get('ping_timeout', 10)
-                allow_origins = config.get('allow_origins', ['*'])
-                server = WSTelnetServer(
-                    host=host,
-                    port=port,
-                    handler_class=handler_class,
-                    path=ws_path,
-                    ssl_cert=ssl_cert if use_ssl else None,
-                    ssl_key=ssl_key if use_ssl else None,
-                    ping_interval=ping_interval,
-                    ping_timeout=ping_timeout,
-                    allow_origins=allow_origins
-                )
-            except ImportError as e:
-                raise ImportError(f"Could not create WebSocket Telnet server: {e}.")
+            # Create a plain WebSocket server
+            ws_path = config.get('ws_path', '/ws')
+            ping_interval = config.get('ping_interval', 30)
+            ping_timeout = config.get('ping_timeout', 10)
+            allow_origins = config.get('allow_origins', ['*'])
+            
+            # Check if SSL is enabled
+            ssl_cert = None
+            ssl_key = None
+            if config.get('use_ssl', False):
+                ssl_cert = config.get('ssl_cert')
+                ssl_key = config.get('ssl_key')
+            
+            server = PlainWebSocketServer(
+                host=host,
+                port=port,
+                handler_class=handler_class,
+                path=ws_path,
+                ping_interval=ping_interval,
+                ping_timeout=ping_timeout,
+                allow_origins=allow_origins,
+                ssl_cert=ssl_cert,
+                ssl_key=ssl_key
+            )
+        elif transport == WS_TELNET_TRANSPORT:
+            # Create a WebSocket Telnet server
+            ws_path = config.get('ws_path', '/ws_telnet')
+            ping_interval = config.get('ping_interval', 30)
+            ping_timeout = config.get('ping_timeout', 10)
+            allow_origins = config.get('allow_origins', ['*'])
+            
+            # Check if SSL is enabled
+            ssl_cert = None
+            ssl_key = None
+            if config.get('use_ssl', False):
+                ssl_cert = config.get('ssl_cert')
+                ssl_key = config.get('ssl_key')
+            
+            server = WSTelnetServer(
+                host=host,
+                port=port,
+                handler_class=handler_class,
+                path=ws_path,
+                ping_interval=ping_interval,
+                ping_timeout=ping_timeout,
+                allow_origins=allow_origins,
+                ssl_cert=ssl_cert,
+                ssl_key=ssl_key
+            )
         else:
-            raise ValueError(f"Unsupported transport: {transport}")
+            raise ValueError(f"Unsupported transport type: {transport}")
         
-        # Apply additional configuration (skip transport-specific keys)
-        excluded_keys = {'host', 'port', 'handler_class', 'transport', 
-                         'ws_path', 'use_ssl', 'ssl_cert', 'ssl_key',
-                         'ping_interval', 'ping_timeout', 'allow_origins'}
+        # Apply any additional server-specific configuration
         for key, value in config.items():
-            if key not in excluded_keys:
-                try:
+            if key not in ['transport', 'handler_class', 'host', 'port', 
+                          'ws_path', 'ping_interval', 'ping_timeout', 
+                          'allow_origins', 'use_ssl', 'ssl_cert', 'ssl_key']:
+                if hasattr(server, key):
                     setattr(server, key, value)
-                    logger.debug(f"Set server attribute {key} = {value}")
-                except AttributeError:
-                    logger.warning(f"Could not set server attribute '{key}'")
+                else:
+                    logger.warning(f"Unknown configuration parameter '{key}' for {server.__class__.__name__}")
         
         return server
-    
-    @staticmethod
-    def save_config(config: Dict[str, Any], filename: str) -> None:
-        """
-        Save configuration to a YAML file.
-        """
-        try:
-            with open(filename, 'w') as f:
-                yaml.dump(config, f, default_flow_style=False)
-            logger.info(f"Configuration saved to {filename}")
-        except IOError as e:
-            logger.error(f"Error saving configuration to {filename}: {e}")
-            raise
-    
-    @staticmethod
-    def create_default_config(handler_class: str, transport: str = TRANSPORT_TELNET) -> Dict[str, Any]:
-        """
-        Create a default configuration dictionary.
-        """
-        if transport not in SUPPORTED_TRANSPORTS:
-            raise ValueError(f"Unsupported transport: {transport}")
-        
-        config = {
-            'host': '0.0.0.0',
-            'port': 8023,
-            'handler_class': handler_class,
-            'transport': transport,
-            'max_connections': 100,
-            'connection_timeout': 300,
-            'welcome_message': "Welcome to the Server!"
-        }
-        
-        if transport in [TRANSPORT_WEBSOCKET, "ws_telnet"]:
-            config.update({
-                'ws_path': '/telnet',
-                'use_ssl': False,
-                'ssl_cert': '',
-                'ssl_key': '',
-                'allow_origins': ['*'],
-                'ping_interval': 30,
-                'ping_timeout': 10
-            })
-            if transport == TRANSPORT_WEBSOCKET:
-                config['welcome_message'] = "Welcome to the WebSocket Server!"
-            else:
-                config['welcome_message'] = "Welcome to the WebSocket Telnet Server!"
-        
-        return config

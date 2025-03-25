@@ -1,120 +1,191 @@
-# Robust Telnet Server Framework
+# Multi-Protocol Server Framework
 
-A comprehensive framework for building reliable telnet-based applications with proper terminal handling. This framework solves common telnet protocol issues and provides a solid foundation for interactive command-line applications.
+A modern Python framework for building server applications that work across multiple transport protocols: Telnet, TCP, and WebSocket. Create a server once and make it accessible from traditional terminal clients, command-line tools, and web browsers.
 
-## Overview
+## Features
 
-This framework provides a layered approach to telnet server implementation, with carefully designed components that handle different aspects of the telnet protocol and terminal interactions. The architecture prioritizes robustness, proper terminal handling, and extensibility.
-
-### Key Features
-
+- **Multiple Transport Protocols**: Run your server on Telnet, TCP, and WebSocket simultaneously
+- **Unified Handler Interface**: Write your application logic once, deploy everywhere
+- **Configurable**: YAML-based configuration with transport-specific options
+- **Graceful Shutdown**: Proper connection handling and clean termination
+- **Protocol Detection**: Automatic Telnet negotiation detection with fallback
+- **Session Management**: Connection limits, timeouts, and custom welcome messages
+- **Async Architecture**: Built on Python's asyncio for efficient handling of concurrent connections
 - **Proper Telnet Protocol Implementation**: Full support for telnet option negotiation and subnegotiation
 - **Dual-Mode Operation**: Supports both line mode and character mode terminal handling
-- **Clean Architecture**: Clear separation between protocol handling and application logic
 - **Robust Error Handling**: Graceful handling of connection issues and unexpected client behavior
-- **Detailed Logging**: Comprehensive logging for troubleshooting and debugging
-- **Customizable Handlers**: Easy extension for different application types
-- **Example Applications**: Stock price feed server implementation and simple echo server
+
+## Requirements
+
+- Python 3.7+
+- Dependencies:
+  - websockets
+  - pyyaml
+  - asyncio
 
 ## Installation
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/yourusername/telnet-server.git
-   cd telnet-server
-   ```
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/multi-protocol-server.git
+cd multi-protocol-server
 
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+# Install dependencies
+pip install -r requirements.txt
 
-3. Run the echo server:
-   ```bash
-   python telnet_server/server_launcher.py -c config/echo_server.yaml
-   ```
-
-## Architecture
-
-The framework is built on a layered architecture:
-
-1. **Connection Handler Layer**: Basic socket I/O and connection management
-2. **Character Protocol Layer**: Character-by-character reading and processing
-3. **Telnet Protocol Layer**: Telnet-specific protocol handling and negotiation
-4. **Application Logic Layer**: Custom application behavior
-
-### Core Components
-
-- **ConnectionHandler**: Handles basic socket I/O and lifecycle
-- **CharacterProtocolHandler**: Provides character-by-character processing
-- **TelnetProtocolHandler**: Implements telnet protocol with proper terminal handling
-- **EchoTelnetHandler / StockFeedHandler**: Application-specific handlers
-
-## Usage
-
-### Basic Usage
-
-To create a simple echo server:
-
-```python
-from telnet_server.protocol_handlers.telnet_protocol_handler import TelnetProtocolHandler
-
-class EchoTelnetHandler(TelnetProtocolHandler):
-    async def on_command_submitted(self, command: str) -> None:
-        await self.send_line(f"Echo: {command}")
+# Optional: Install development dependencies
+pip install -r requirements-dev.txt
 ```
 
-### Server Launcher
+## Quick Start
 
-The framework includes a flexible server launcher for easy testing and deployment:
+1. Create a handler class that inherits from one of the base handlers
+2. Configure your server with a YAML file
+3. Launch your server using the server launcher
 
 ```bash
-# Run with a specific handler
-python telnet_server/server_launcher.py your_module.your_handler:YourHandlerClass
-
-# Run with configuration file
-python telnet_server/server_launcher.py -c config/your_config.yaml
+python -m telnet_server.server_launcher -c config/echo_server.yaml
 ```
 
-### Stock Feed Server Example
+## Client Connections
 
-A complete stock price feed server is included to demonstrate advanced functionality:
+Your server will be accessible from multiple client types:
+
+### Telnet Client
+
+Connect to the Telnet transport using a traditional Telnet client:
 
 ```bash
-# Run the stock feed server
-python stock_feed_server.py
+telnet localhost 8023
 ```
 
-## Terminal Handling
+The server will negotiate Telnet options and provide a full-featured terminal experience.
 
-The framework includes sophisticated terminal handling that correctly negotiates capabilities with telnet clients:
+### TCP Client (netcat)
 
-1. **Initial Negotiation**: Establishes proper terminal settings at connection time
-2. **Visual Feedback**: Echoes characters and provides appropriate visual feedback
-3. **Control Character Handling**: Properly processes CR, LF, backspace, and other control characters
-4. **Window Size**: Adapts to client terminal dimensions when available
-5. **Terminal Type**: Detects client terminal type for specialized behavior
+Connect to the TCP transport using netcat or similar tools:
 
-## Customization
+```bash
+nc localhost 8024
+```
 
-### Creating Custom Handlers
+This provides a simple line-based interface without Telnet negotiation.
 
-1. Inherit from `TelnetProtocolHandler` for most applications:
+### WebSocket Client
+
+Connect to the WebSocket transport using any WebSocket client:
+
+#### Command-line with websocat
+
+```bash
+# Install websocat if needed (https://github.com/vi/websocat)
+websocat --exit-on-eof ws://localhost:8025/ws
+```
+
+#### Browser JavaScript
+
+```javascript
+const ws = new WebSocket('ws://localhost:8025/ws');
+ws.onmessage = function(event) { console.log('Received:', event.data); };
+ws.onopen = function() { console.log('Connected!'); };
+ws.onclose = function() { console.log('Disconnected'); };
+
+// Send a message
+ws.send('hello');
+```
+
+## Configuration
+
+The framework uses YAML configuration files for server setup:
+
+```yaml
+# Single server configuration
+host: 0.0.0.0
+port: 8023
+handler_class: sample_servers.echo_server:EchoTelnetHandler
+
+# OR 
+
+# Multi-transport configuration
+servers:
+  telnet:
+    host: "0.0.0.0"
+    port: 8023
+    transport: "telnet"
+    handler_class: "sample_servers.echo_server:EchoTelnetHandler"
+    max_connections: 100
+    connection_timeout: 300
+    welcome_message: "Welcome to the Telnet Server!"
+
+  tcp:
+    host: "0.0.0.0"
+    port: 8024
+    transport: "tcp"
+    handler_class: "sample_servers.echo_server:EchoTelnetHandler"
+    max_connections: 100
+    connection_timeout: 300
+    welcome_message: "Welcome to the TCP Server!"
+
+  websocket:
+    host: "0.0.0.0"
+    port: 8025
+    transport: "websocket"
+    ws_path: "/ws"
+    handler_class: "sample_servers.echo_server:EchoTelnetHandler"
+    use_ssl: false
+    allow_origins:
+      - "*"
+    max_connections: 100
+    connection_timeout: 300
+    welcome_message: "Welcome to the WebSocket Server!"
+```
+
+### Configuration Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| host | Bind address | 0.0.0.0 |
+| port | Listen port | 8023 |
+| transport | Protocol type (telnet, tcp, websocket, ws_telnet) | telnet |
+| handler_class | Handler class path (module:ClassName) | Required |
+| max_connections | Maximum concurrent connections | 100 |
+| connection_timeout | Session timeout in seconds | 300 |
+| welcome_message | Message displayed on connection | None |
+| ws_path | Path for WebSocket endpoint | /ws |
+| allow_origins | CORS allowed origins | ["*"] |
+| use_ssl | Enable SSL/TLS (WebSocket) | false |
+| ssl_cert | Path to SSL certificate | None |
+| ssl_key | Path to SSL key | None |
+| ping_interval | WebSocket ping interval in seconds | 30 |
+| ping_timeout | WebSocket ping timeout in seconds | 10 |
+
+## Creating Handlers
+
+Handlers define your server's behavior. Extend one of the base handler classes:
 
 ```python
-class MyCustomHandler(TelnetProtocolHandler):
+#!/usr/bin/env python3
+from telnet_server.handlers.telnet_handler import TelnetHandler
+
+class EchoTelnetHandler(TelnetHandler):
     async def on_command_submitted(self, command: str) -> None:
-        # Process commands here
-        if command.startswith("hello"):
-            await self.send_line("Hello to you too!")
+        if command.lower() == 'help':
+            await self.send_line("Available commands: help, info, quit")
         else:
-            await self.send_line(f"Unknown command: {command}")
+            await self.send_line(f"Echo: {command}")
+
+    async def process_line(self, line: str) -> bool:
+        if line.lower() in ['quit', 'exit', 'q']:
+            await self.end_session("Goodbye!")
+            return False
+        await self.on_command_submitted(line)
+        return True
 ```
 
-2. For more advanced customization, override additional methods:
+For more advanced customization, override additional methods:
 
 ```python
-class AdvancedHandler(TelnetProtocolHandler):
+class AdvancedHandler(TelnetHandler):
     def __init__(self, reader, writer):
         super().__init__(reader, writer)
         self.custom_state = {}
@@ -129,17 +200,91 @@ class AdvancedHandler(TelnetProtocolHandler):
         return await super().process_character(char)
 ```
 
-### Configuration Files
+## Architecture
 
-Configure servers with YAML configuration files:
+The framework is built on a layered architecture:
 
-```yaml
-# config/my_server.yaml
-host: 0.0.0.0
-port: 8023
-handler_class: my_module.my_handler:MyCustomHandler
-max_connections: 100
+1. **Servers**: Handle transport-specific connection management (Telnet, TCP, WebSocket)
+2. **Handlers**: Process client input and generate responses
+3. **Adapters**: Bridge between different transport types and handlers
+
+This modular design allows for:
+
+- **Transport Layer**: Manages network protocols and connections
+- **Character Protocol Layer**: Character-by-character reading and processing
+- **Telnet Protocol Layer**: Telnet-specific protocol handling and negotiation
+- **Application Logic Layer**: Custom application behavior
+
+## Running the Server
+
+Launch your server with the server launcher module:
+
+```bash
+# With a configuration file
+python -m telnet_server.server_launcher -c config/my_server.yaml
+
+# Direct handler specification
+python -m telnet_server.server_launcher my_package.handlers:MyHandler --port 8000
+
+# Verbose logging
+python -m telnet_server.server_launcher -c config/my_server.yaml -vv
 ```
+
+## Example Servers
+
+Several example servers are provided to demonstrate the framework:
+
+- **Echo Server**: Simple echo server that responds to commands
+- **Stock Server**: Mock stock ticker server with real-time updates
+- **Guess Who Server**: Text-based implementation of the Guess Who game
+
+Run them from the examples directory:
+
+```bash
+python -m telnet_server.server_launcher -c config/echo_server.yaml
+```
+
+## Terminal Handling
+
+The framework includes sophisticated terminal handling that correctly negotiates capabilities with telnet clients:
+
+1. **Initial Negotiation**: Establishes proper terminal settings at connection time
+2. **Visual Feedback**: Echoes characters and provides appropriate visual feedback
+3. **Control Character Handling**: Properly processes CR, LF, backspace, and other control characters
+4. **Window Size**: Adapts to client terminal dimensions when available
+5. **Terminal Type**: Detects client terminal type for specialized behavior
+
+## Telnet Option Negotiation
+
+The framework handles telnet option negotiation according to RFC 854 and related standards. Key options supported include:
+
+- **ECHO (option 1)**: Controls character echo
+- **SGA (option 3)**: Suppresses Go Ahead signals for full-duplex operation
+- **TERMINAL TYPE (option 24)**: Identifies client terminal type
+- **NAWS (option 31)**: Negotiates window size
+- **LINEMODE (option 34)**: Controls line-by-line versus character-by-character input
+
+## Terminal Control Sequences
+
+The framework properly handles terminal control sequences:
+
+- **Backspace**: Sends `\b \b` to visually erase characters
+- **Newline**: Sends `\r\n` for proper line breaks
+- **Control characters**: Properly processes Ctrl+C and other control characters
+
+## Extending the Framework
+
+### Adding a New Transport
+
+1. Create a new server class extending `BaseServer`
+2. Implement required methods for your transport
+3. Add the transport type to the server launcher
+
+### Creating Custom Handlers
+
+1. Extend one of the base handler classes (BaseHandler, CharacterHandler, LineHandler, TelnetHandler)
+2. Implement your application logic
+3. Configure the server to use your handler
 
 ## Logging
 
@@ -155,35 +300,17 @@ logging.basicConfig(
 
 Different components use different loggers:
 - `telnet-protocol`: Telnet protocol events and negotiations
-- `base-protocol`: Base protocol operations
-- `character-protocol`: Character processing events
-- `telnet-server`: Server lifecycle events
-
-## Advanced Topics
-
-### Telnet Option Negotiation
-
-The framework handles telnet option negotiation according to RFC 854 and related standards. Key options supported include:
-
-- **ECHO (option 1)**: Controls character echo
-- **SGA (option 3)**: Suppresses Go Ahead signals for full-duplex operation
-- **TERMINAL TYPE (option 24)**: Identifies client terminal type
-- **NAWS (option 31)**: Negotiates window size
-- **LINEMODE (option 34)**: Controls line-by-line versus character-by-character input
-
-### Terminal Control Sequences
-
-The framework properly handles terminal control sequences:
-
-- Backspace: Sends `\b \b` to visually erase characters
-- Newline: Sends `\r\n` for proper line breaks
-- Control characters: Properly processes Ctrl+C and other control characters
+- `base-server`: Server lifecycle events
+- `character-handler`: Character processing events
+- `websocket-adapter`: WebSocket connection events
+- `ws-plain-server`: WebSocket server events
 
 ## Performance Considerations
 
 - The server uses asyncio for efficient handling of multiple connections
 - Character-by-character processing is more CPU-intensive than line mode
 - Connection cleanup is handled carefully to prevent resource leaks
+- WebSocket connections include ping/pong frames to detect disconnects
 
 ## Troubleshooting
 
@@ -193,10 +320,11 @@ Common issues and solutions:
 - **No character echo**: Verify ECHO option negotiation
 - **Slow performance**: Reduce logging level in production environments
 - **Connection resets**: Ensure proper error handling in custom handlers
+- **WebSocket client doesn't exit**: Use the `--exit-on-eof` flag with websocat
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+[MIT License](LICENSE)
 
 ## Contributing
 
@@ -206,4 +334,5 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 - Telnet protocol specifications (RFCs 854, 855, 856, etc.)
 - The asyncio library for elegant async/await support
+- The websockets library for WebSocket protocol support
 - The Python community for inspiration and feedback
