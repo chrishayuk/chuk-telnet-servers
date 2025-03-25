@@ -18,8 +18,9 @@ from telnet_server.handlers.base_handler import BaseHandler
 
 # Define transport types
 TRANSPORT_TELNET = "telnet"
-TRANSPORT_WEBSOCKET = "websocket"
-SUPPORTED_TRANSPORTS = [TRANSPORT_TELNET, TRANSPORT_WEBSOCKET]
+TRANSPORT_WEBSOCKET = "websocket" 
+TRANSPORT_AUTO_DETECT = "auto-detect"
+SUPPORTED_TRANSPORTS = [TRANSPORT_TELNET, TRANSPORT_WEBSOCKET, TRANSPORT_AUTO_DETECT]
 
 logger = logging.getLogger('server-config')
 
@@ -124,8 +125,8 @@ class ServerConfig:
             )
         
         # Validate transport-specific settings
-        if transport == TRANSPORT_WEBSOCKET:
-            # WebSocket-specific validation
+        if transport in [TRANSPORT_WEBSOCKET, TRANSPORT_AUTO_DETECT]:
+            # WebSocket-specific validation (also applies to auto-detect)
             if 'ws_path' not in config:
                 logger.warning("No WebSocket path specified, using default: '/telnet'")
                 config['ws_path'] = '/telnet'
@@ -158,14 +159,95 @@ class ServerConfig:
             ImportError: If the required transport-specific module can't be imported
             ValueError: If the transport is invalid
         """
-        # Use the ServerFactory to create the server
-        from telnet_server.server_factory import ServerFactory
+        # Extract base server parameters
+        host = config.get('host', '0.0.0.0')
+        port = config.get('port', 8023)
+        transport = config.get('transport', TRANSPORT_TELNET)
         
-        # Create the server
-        server = ServerFactory.create_server(config, handler_class)
+        # Create the server based on transport type
+        if transport == TRANSPORT_TELNET:
+            # Create standard TelnetServer
+            server = TelnetServer(host, port, handler_class)
+            
+        elif transport == TRANSPORT_WEBSOCKET:
+            # Import the WebSocketServer at runtime
+            try:
+                from telnet_server.transports.websocket.ws_server import WebSocketServer
+                
+                # Extract WebSocket-specific settings
+                ws_path = config.get('ws_path', '/telnet')
+                use_ssl = config.get('use_ssl', False)
+                ssl_cert = config.get('ssl_cert', None)
+                ssl_key = config.get('ssl_key', None)
+                ping_interval = config.get('ping_interval', 30)
+                ping_timeout = config.get('ping_timeout', 10)
+                allow_origins = config.get('allow_origins', ['*'])
+                
+                # Create WebSocket server
+                server = WebSocketServer(
+                    host=host, 
+                    port=port, 
+                    handler_class=handler_class,
+                    path=ws_path,
+                    ssl_cert=ssl_cert if use_ssl else None,
+                    ssl_key=ssl_key if use_ssl else None,
+                    ping_interval=ping_interval,
+                    ping_timeout=ping_timeout,
+                    allow_origins=allow_origins
+                )
+            except ImportError as e:
+                raise ImportError(
+                    f"Could not create WebSocket server: {e}. "
+                    "WebSocket transport requires the 'websockets' package. "
+                    "Install it with: pip install websockets"
+                )
+        
+        elif transport == TRANSPORT_AUTO_DETECT:
+            # Import the AutoDetectServer at runtime
+            try:
+                from telnet_server.transports.auto_detect_server import AutoDetectServer
+                
+                # Extract WebSocket-specific settings (used by auto-detect)
+                ws_path = config.get('ws_path', '/telnet')
+                use_ssl = config.get('use_ssl', False)
+                ssl_cert = config.get('ssl_cert', None)
+                ssl_key = config.get('ssl_key', None)
+                ping_interval = config.get('ping_interval', 30)
+                ping_timeout = config.get('ping_timeout', 10)
+                allow_origins = config.get('allow_origins', ['*'])
+                
+                # Create AutoDetect server
+                server = AutoDetectServer(
+                    host=host, 
+                    port=port, 
+                    handler_class=handler_class,
+                    ws_path=ws_path,
+                    ssl_cert=ssl_cert if use_ssl else None,
+                    ssl_key=ssl_key if use_ssl else None,
+                    ping_interval=ping_interval,
+                    ping_timeout=ping_timeout,
+                    allow_origins=allow_origins
+                )
+            except ImportError as e:
+                raise ImportError(
+                    f"Could not create Auto-Detect server: {e}."
+                )
+        
+        else:
+            raise ValueError(f"Unsupported transport: {transport}")
         
         # Apply additional configuration
-        ServerFactory.apply_config_to_server(server, config)
+        excluded_keys = {'host', 'port', 'handler_class', 'transport', 
+                        'ws_path', 'use_ssl', 'ssl_cert', 'ssl_key',
+                        'ping_interval', 'ping_timeout', 'allow_origins'}
+        
+        for key, value in config.items():
+            if key not in excluded_keys:
+                try:
+                    setattr(server, key, value)
+                    logger.debug(f"Set server attribute {key} = {value}")
+                except AttributeError:
+                    logger.warning(f"Could not set server attribute '{key}'")
         
         return server
     
@@ -196,7 +278,7 @@ class ServerConfig:
         
         Args:
             handler_class: The handler class path string
-            transport: The transport type to use (telnet or websocket)
+            transport: The transport type to use (telnet, websocket, or auto-detect)
             
         Returns:
             A default configuration dictionary
@@ -215,11 +297,11 @@ class ServerConfig:
             'transport': transport,
             'max_connections': 100,
             'connection_timeout': 300,
-            'welcome_message': "Welcome to the Telnet Server!"
+            'welcome_message': "Welcome to the Server!"
         }
         
         # Add transport-specific defaults
-        if transport == TRANSPORT_WEBSOCKET:
+        if transport in [TRANSPORT_WEBSOCKET, TRANSPORT_AUTO_DETECT]:
             config.update({
                 'ws_path': '/telnet',
                 'use_ssl': False,
@@ -229,5 +311,10 @@ class ServerConfig:
                 'ping_interval': 30,  # WebSocket keepalive in seconds
                 'ping_timeout': 10
             })
+            
+            if transport == TRANSPORT_AUTO_DETECT:
+                config['welcome_message'] = "Welcome to the Auto-Detect Server! Supporting both Telnet and WebSocket clients."
+            else:
+                config['welcome_message'] = "Welcome to the WebSocket Server!"
         
         return config

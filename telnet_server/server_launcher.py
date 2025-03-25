@@ -9,7 +9,7 @@ configuration file parsing, and provides a universal entry point for different
 types of servers and transport protocols.
 
 Key Features:
-- Support for multiple transport protocols (Telnet, WebSocket, etc.)
+- Support for multiple transport protocols (Telnet, WebSocket, Auto-Detect)
 - Dynamic handler class loading
 - YAML configuration support
 - Configurable logging levels
@@ -32,7 +32,8 @@ from telnet_server.handlers.base_handler import BaseHandler
 # These are explicitly defined here to avoid circular imports
 TRANSPORT_TELNET = "telnet"
 TRANSPORT_WEBSOCKET = "websocket"
-SUPPORTED_TRANSPORTS = [TRANSPORT_TELNET, TRANSPORT_WEBSOCKET]
+TRANSPORT_AUTO_DETECT = "auto-detect"
+SUPPORTED_TRANSPORTS = [TRANSPORT_TELNET, TRANSPORT_WEBSOCKET, TRANSPORT_AUTO_DETECT]
 
 # Import server classes
 from telnet_server.server import TelnetServer
@@ -129,6 +130,15 @@ def create_server_instance(
         raise ValueError(f"Unsupported transport: {transport}. "
                          f"Supported transports: {', '.join(SUPPORTED_TRANSPORTS)}")
     
+    # Extract common WebSocket configuration for both WebSocket and Auto-Detect modes
+    ws_path = config.get('ws_path', '/telnet')
+    use_ssl = config.get('use_ssl', False)
+    ssl_cert = config.get('ssl_cert')
+    ssl_key = config.get('ssl_key')
+    ping_interval = config.get('ping_interval', 30)
+    ping_timeout = config.get('ping_timeout', 10)
+    allow_origins = config.get('allow_origins', ['*'])
+    
     # Create the server based on transport type
     if transport == TRANSPORT_TELNET:
         server = TelnetServer(host, port, handler_class)
@@ -143,15 +153,6 @@ def create_server_instance(
             except ImportError:
                 # If that fails, try importing directly from the module
                 from telnet_server.transports.websocket.ws_server import WebSocketServer
-            
-            # Extract WebSocket-specific configuration
-            ws_path = config.get('ws_path', '/telnet')
-            use_ssl = config.get('use_ssl', False)
-            ssl_cert = config.get('ssl_cert')
-            ssl_key = config.get('ssl_key')
-            ping_interval = config.get('ping_interval', 30)
-            ping_timeout = config.get('ping_timeout', 10)
-            allow_origins = config.get('allow_origins', ['*'])
             
             # Create WebSocket server with SSL if configured
             if use_ssl and ssl_cert and ssl_key:
@@ -178,6 +179,36 @@ def create_server_instance(
                 f"Could not create WebSocket server: {e}. "
                 "WebSocket transport requires the 'websockets' package. "
                 "Install it with: pip install websockets"
+            )
+            
+    elif transport == TRANSPORT_AUTO_DETECT:
+        # Import AutoDetectServer dynamically
+        try:
+            from telnet_server.transports.auto_detect_server import AutoDetectServer
+            
+            # Create auto-detect server with the appropriate settings
+            if use_ssl and ssl_cert and ssl_key:
+                server = AutoDetectServer(
+                    host, port, handler_class,
+                    ws_path=ws_path,
+                    ssl_cert=ssl_cert,
+                    ssl_key=ssl_key,
+                    ping_interval=ping_interval,
+                    ping_timeout=ping_timeout,
+                    allow_origins=allow_origins
+                )
+            else:
+                server = AutoDetectServer(
+                    host, port, handler_class,
+                    ws_path=ws_path,
+                    ping_interval=ping_interval,
+                    ping_timeout=ping_timeout,
+                    allow_origins=allow_origins
+                )
+        
+        except ImportError as e:
+            raise ImportError(
+                f"Could not create Auto-Detect server: {e}."
             )
     else:
         # This should never happen due to earlier validation

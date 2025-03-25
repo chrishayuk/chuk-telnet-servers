@@ -1,16 +1,14 @@
-# Echo Server Configuration
-# This configuration supports both Telnet and WebSocket transports
+# Auto-Detect Echo Server Configuration
+# This server automatically detects whether clients are connecting
+# via Telnet or WebSocket and handles them appropriately
 
 # Common settings
 host: 0.0.0.0
 port: 8023
 handler_class: sample_servers.echo_server:EchoTelnetHandler
+transport: auto-detect
 
-# Transport settings
-# Set transport to 'telnet' or 'websocket' to choose the transport type
-transport: telnet
-
-# WebSocket-specific settings (used when transport is 'websocket')
+# WebSocket-specific settings
 ws_path: /telnet
 use_ssl: false
 ssl_cert: ""
@@ -23,4 +21,4 @@ ping_timeout: 10
 # General server settings
 max_connections: 100
 connection_timeout: 300
-welcome_message: "Welcome to the Echo Server! This server supports both Telnet and WebSocket transports."
+welcome_message: "Welcome to the Auto-Detect Echo Server! This server automatically handles both Telnet and WebSocket clients."
