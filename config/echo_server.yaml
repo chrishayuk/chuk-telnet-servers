@@ -6,7 +6,7 @@
 host: 0.0.0.0
 port: 8023
 handler_class: sample_servers.echo_server:EchoTelnetHandler
-transport: auto-detect
+transport: telnet
 
 # WebSocket-specific settings
 ws_path: /telnet

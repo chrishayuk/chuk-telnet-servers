@@ -3,11 +3,19 @@
 """
 Auto-Detecting Multi-Protocol Server
 
-This module provides a server implementation that automatically detects
-the protocol being used by the client and routes the connection to
-the appropriate protocol handler. This allows a single server to handle
-multiple protocols (e.g., Telnet, WebSocket) on the same port.
+This server listens on a single port and:
+ - If the first 4 bytes are 'GET ', it performs a WebSocket handshake,
+   then attempts Telnet negotiation over the WebSocket (Telnet IAC codes
+   in binary frames). If the client doesn't respond with Telnet codes,
+   it falls back to a simple line-echo mode.
+ - Otherwise, it immediately recognizes Telnet, reinjects any leftover bytes,
+   and hands off to your normal Telnet handler (handler_class).
+ 
+Requires:
+ - telnet_server/server.py (your existing TelnetServer)
+ - websockets >= 9 (if you have the older constructor requiring ws_handler/ws_server).
 """
+
 import asyncio
 import logging
 import ssl
@@ -16,44 +24,158 @@ import base64
 import hashlib
 from typing import Dict, Any, List, Type
 
-# Import base classes
-from telnet_server.handlers.base_handler import BaseHandler
+from telnet_server.server import TelnetServer  # your normal Telnet server
 from telnet_server.transports.base_server import BaseServer
+from telnet_server.handlers.base_handler import BaseHandler
 
-# Import specific protocol implementations
-from telnet_server.server import TelnetServer
-
-# Try to import websockets
 try:
     import websockets
     from websockets.server import WebSocketServerProtocol
     from websockets.exceptions import ConnectionClosed
-    from telnet_server.transports.websocket.ws_adapter import WebSocketAdapter
     WEBSOCKETS_AVAILABLE = True
 except ImportError:
     WEBSOCKETS_AVAILABLE = False
-    WEBSOCKETS_ERROR = (
-        "WebSocket support requires the 'websockets' package. "
-        "Install with: pip install websockets"
-    )
+    WEBSOCKETS_ERROR = "Missing websockets package. Install with: pip install websockets"
 
-logger = logging.getLogger('auto-detect-server')
+logger = logging.getLogger("auto-detect-server")
 
+# For older websockets (including v15) that require ws_server.register():
+class DummyWSServer:
+    def register(self, protocol):
+        pass
+
+##############################################################################
+# Telnet Over WebSocket Handler
+##############################################################################
+
+IAC  = 255
+WILL = 251
+WONT = 252
+DO   = 253
+DONT = 254
+ECHO = 1
+SGA  = 3
+
+class TelnetOverWebSocketHandler(BaseHandler):
+    """
+    A single handler that attempts Telnet negotiation (IAC WILL ECHO, etc.)
+    inside a WebSocket. If the client doesn't respond with IAC codes, it
+    falls back to line-based echo.
+    """
+    def __init__(self, websocket):
+        super().__init__(None, None)
+        self.websocket = websocket
+        self.negotiation_timeout = 2.0
+        self.is_telnet = False
+        self.fallback_mode = False
+
+    async def handle_client(self) -> None:
+        try:
+            logger.debug("Sending IAC WILL ECHO/SGA for Telnet over WebSocket.")
+            await self.send_telnet_command(IAC, WILL, ECHO)
+            await self.send_telnet_command(IAC, WILL, SGA)
+
+            responded = await self.wait_for_telnet_response()
+            if responded:
+                logger.info("Client responded with IAC => continuing Telnet over WS.")
+                self.is_telnet = True
+                await self.send_line("Telnet negotiation successful! Type 'quit' to exit.\r\n")
+            else:
+                logger.info("No Telnet codes => fallback mode.")
+                self.fallback_mode = True
+                await self.send_line("Fallback mode (no Telnet negotiation). Type 'quit' to exit.\r\n")
+
+            while True:
+                data = await self.websocket.recv()
+                if data is None:
+                    logger.debug("WebSocket closed (None).")
+                    break
+
+                # Convert text frames to bytes
+                if isinstance(data, str):
+                    data = data.encode("utf-8", errors="replace")
+
+                if self.fallback_mode:
+                    # Just a line-based echo
+                    line = data.decode("utf-8", errors="replace").strip()
+                    if line.lower() in ("quit", "exit"):
+                        await self.send_line("Goodbye (fallback).")
+                        break
+                    else:
+                        await self.send_line(f"Echo(fallback): {line}")
+                else:
+                    # Telnet mode
+                    if b"quit" in data.lower():
+                        await self.send_line("Goodbye from Telnet-over-WS!")
+                        break
+                    # If you want to parse IAC fully, do so here. We'll just echo:
+                    line = data.decode("utf-8", errors="replace").strip()
+                    await self.send_line(f"TelnetEcho: {line}")
+
+        except ConnectionClosed:
+            logger.debug("WebSocket connection closed.")
+        except Exception as e:
+            logger.error(f"TelnetOverWebSocketHandler error: {e}", exc_info=True)
+
+    async def wait_for_telnet_response(self) -> bool:
+        try:
+            frame = await asyncio.wait_for(self.websocket.recv(), timeout=self.negotiation_timeout)
+            if not frame:
+                return False
+            if isinstance(frame, str):
+                frame = frame.encode("utf-8", errors="replace")
+            if IAC in frame:
+                logger.debug(f"Detected IAC in initial WS frame: {frame}")
+                return True
+            else:
+                logger.debug("No IAC => fallback.")
+                await self.send_line(f"Echo(fallback-first): {frame.decode('utf-8','replace')}")
+                return False
+        except asyncio.TimeoutError:
+            logger.debug("Timeout => fallback.")
+            return False
+        except ConnectionClosed:
+            logger.debug("ConnectionClosed => fallback.")
+            return False
+
+    async def send_telnet_command(self, *bytes_seq):
+        data = bytes(bytes_seq)
+        await self.websocket.send(data)
+
+    async def send_line(self, text: str):
+        data = (text + "\r\n").encode("utf-8")
+        await self.websocket.send(data)
+
+##############################################################################
+# Minimal Adapter for TelnetOverWebSocketHandler
+##############################################################################
+
+class TelnetOverWSAdapter:
+    def __init__(self, protocol: WebSocketServerProtocol):
+        self.protocol = protocol
+        self.handler = None
+
+    async def handle_client(self):
+        self.handler = TelnetOverWebSocketHandler(self.protocol)
+        await self.handler.handle_client()
+
+##############################################################################
+# The AutoDetectServer
+##############################################################################
 
 class AutoDetectServer(BaseServer):
     """
-    Server that automatically detects and handles multiple protocols.
-    
-    This server examines the initial bytes of each connection to determine
-    the protocol being used by the client, then routes the connection to
-    the appropriate handler.
+    Auto-detect server:
+     - If first 4 bytes == 'GET ', do a manual WebSocket handshake,
+       then run TelnetOverWebSocketHandler.
+     - Otherwise, treat as Telnet with your normal `handler_class`.
     """
     def __init__(
         self,
-        host: str = '0.0.0.0',
+        host: str = "0.0.0.0",
         port: int = 8023,
         handler_class: Type[BaseHandler] = None,
-        ws_path: str = '/telnet',
+        ws_path: str = "/telnet",
         ssl_cert: str = None,
         ssl_key: str = None,
         ping_interval: int = 30,
@@ -61,12 +183,11 @@ class AutoDetectServer(BaseServer):
         allow_origins: List[str] = None
     ):
         super().__init__(host, port, handler_class)
-        
         self.ws_path = ws_path
         self.ping_interval = ping_interval
         self.ping_timeout = ping_timeout
-        self.allow_origins = allow_origins or ['*']
-        
+        self.allow_origins = allow_origins or ["*"]
+
         self.ssl_cert = ssl_cert
         self.ssl_key = ssl_key
         self.ssl_context = None
@@ -74,13 +195,12 @@ class AutoDetectServer(BaseServer):
             self.ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
             self.ssl_context.load_cert_chain(ssl_cert, ssl_key)
             logger.info(f"SSL enabled with cert: {ssl_cert}")
-        
-        # Track active connections by protocol (for optional broadcast)
+
         self.connections_by_protocol = {
-            'telnet': set(),
-            'websocket': set()
+            "telnet": set(),
+            "websocket": set(),
         }
-    
+
     async def start_server(self) -> None:
         await super().start_server()
         try:
@@ -88,190 +208,138 @@ class AutoDetectServer(BaseServer):
                 self.handle_new_connection,
                 self.host,
                 self.port,
-                ssl=self.ssl_context
+                ssl=self.ssl_context,
             )
             scheme = "wss/telnets" if self.ssl_context else "ws/telnet"
             logger.info(f"Auto-detect server running on {scheme}://{self.host}:{self.port}")
-            
+
             async with self.server:
                 await self.server.serve_forever()
         except Exception as e:
             logger.error(f"Error starting auto-detect server: {e}")
             raise
-    
+
     async def handle_new_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        addr = writer.get_extra_info('peername')
+        addr = writer.get_extra_info("peername")
         logger.debug(f"New connection from {addr}")
-        
+
         try:
-            # Read a small chunk to detect "GET " (WebSocket) vs. Telnet IAC (0xFF) vs. default
+            # Attempt to read 4 bytes to detect "GET "
             initial_data = await reader.readexactly(4)
         except asyncio.IncompleteReadError:
-            # If we didn't even get 4 bytes, treat as Telnet or close
-            initial_data = b''
-        
+            initial_data = b""
+
         if not initial_data:
-            logger.warning(f"Empty initial data from {addr}, closing connection")
+            logger.warning(f"Empty initial data from {addr}, closing.")
             writer.close()
             return
-        
-        protocol = self.detect_protocol(initial_data)
-        logger.info(f"Detected protocol '{protocol}' from {addr}")
-        
-        if protocol == 'websocket':
-            # Handle WebSocket handshake manually
+
+        # Check if it's "GET "
+        if initial_data.startswith(b"GET "):
             await self.handle_websocket_connection(initial_data, reader, writer)
         else:
-            # Put the 4 bytes back into the existing reader buffer so
-            # all subsequent data remains in the same StreamReader.
-            self.reinject_data(reader, initial_data)
-            
-            # Now handle as Telnet using the *same* reader
+            # Not GET => Telnet
+            leftover = reader._buffer
+            combined = bytearray(initial_data)
+            combined.extend(leftover)
+            leftover.clear()
+            reader._buffer.extend(combined)
+
             await self.handle_telnet_connection(reader, writer)
-    
-    def detect_protocol(self, initial_data: bytes) -> str:
-        if initial_data.startswith(b'GET '):
-            return 'websocket'
-        if initial_data and initial_data[0] == 0xFF:
-            return 'telnet'
-        return 'telnet'
-    
-    def reinject_data(self, reader: asyncio.StreamReader, data: bytes) -> None:
-        """
-        Put 'data' back into 'reader' so the telnet handler sees it.
-        """
-        leftover = reader._buffer  # already-read leftover in the original reader
-        # Combine them
-        combined = bytearray(data)
-        combined.extend(leftover)
-        leftover.clear()
-        
-        # Now feed back into the original reader buffer
-        reader._buffer.extend(combined)
-    
-    async def handle_telnet_connection(
-        self,
-        reader: asyncio.StreamReader,
-        writer: asyncio.StreamWriter
-    ) -> None:
-        addr = writer.get_extra_info('peername')
+
+    async def handle_telnet_connection(self, reader, writer):
+        addr = writer.get_extra_info("peername")
         handler = self.handler_class(reader, writer)
         handler.server = self
-        
+
         self.active_connections.add(handler)
-        self.connections_by_protocol['telnet'].add(handler)
-        
+        self.connections_by_protocol["telnet"].add(handler)
+
         try:
             await handler.handle_client()
         except Exception as e:
-            logger.error(f"Error handling telnet client {addr}: {e}")
+            logger.error(f"Telnet error from {addr}: {e}")
         finally:
             try:
-                if hasattr(handler, 'cleanup'):
+                if hasattr(handler, "cleanup"):
                     await handler.cleanup()
                 writer.close()
-                try:
-                    await asyncio.wait_for(writer.wait_closed(), 5.0)
-                except Exception:
-                    pass
-            except Exception as e:
-                logger.error(f"Error cleaning up telnet connection: {e}")
-            
+                await asyncio.wait_for(writer.wait_closed(), 3.0)
+            except:
+                pass
             self.active_connections.discard(handler)
-            self.connections_by_protocol['telnet'].discard(handler)
-    
-    async def handle_websocket_connection(
-        self,
-        initial_data: bytes,
-        reader: asyncio.StreamReader,
-        writer: asyncio.StreamWriter
-    ) -> None:
-        addr = writer.get_extra_info('peername')
-        
+            self.connections_by_protocol["telnet"].discard(handler)
+
+    async def handle_websocket_connection(self, initial_data, reader, writer):
         if not WEBSOCKETS_AVAILABLE:
-            logger.warning(f"WebSocket connection from {addr} rejected: {WEBSOCKETS_ERROR}")
-            error_body = f"Server Error: {WEBSOCKETS_ERROR}".encode('utf-8')
-            response = (
-                b"HTTP/1.1 400 Bad Request\r\n"
-                b"Content-Type: text/plain\r\n"
-                b"Connection: close\r\n"
-                b"\r\n"
-            ) + error_body
-            writer.write(response)
-            await writer.drain()
+            logger.warning(f"WebSocket from {writer.get_extra_info('peername')} rejected: {WEBSOCKETS_ERROR}")
             writer.close()
             return
-        
-        # Combine initial_data + anything in the reader buffer to parse the HTTP request
-        full_request = bytearray(initial_data)
-        full_request.extend(reader._buffer)
+
+        addr = writer.get_extra_info("peername")
+
+        # Rebuild the HTTP request
+        full_req = bytearray(initial_data)
+        full_req.extend(reader._buffer)
         reader._buffer.clear()
-        
-        lines = full_request.split(b'\n')
+
+        lines = full_req.split(b"\n")
         if not lines:
             writer.close()
             return
-        
-        request_line = lines[0].decode('utf-8', errors='replace').strip()
-        match = re.match(r'GET\s+(\S+)\s+HTTP', request_line)
+
+        req_line = lines[0].decode("utf-8", errors="replace").strip()
+        match = re.match(r"GET\s+(\S+)\s+HTTP", req_line)
         if not match:
-            logger.warning(f"Invalid WebSocket request line from {addr}")
             writer.write(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
             await writer.drain()
             writer.close()
             return
-        
+
         path = match.group(1)
-        
-        # Parse headers
+        # parse headers
         headers = {}
         for line in lines[1:]:
             line = line.strip()
             if not line:
                 break
             try:
-                k, v = line.decode('utf-8', errors='ignore').split(':', 1)
+                k, v = line.decode("utf-8", errors="ignore").split(":", 1)
                 headers[k.lower().strip()] = v.strip()
-            except ValueError:
+            except:
                 pass
-        
-        # Basic checks
-        if 'upgrade' not in headers or 'sec-websocket-key' not in headers:
-            logger.warning(f"Invalid WebSocket request from {addr}")
+
+        if "upgrade" not in headers or "sec-websocket-key" not in headers:
             writer.write(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
             await writer.drain()
             writer.close()
             return
-        
-        if headers['upgrade'].lower() != 'websocket':
-            logger.warning(f"Missing 'Upgrade: websocket' from {addr}")
+
+        if headers["upgrade"].lower() != "websocket":
             writer.write(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
             await writer.drain()
             writer.close()
             return
-        
+
         if path != self.ws_path:
-            logger.warning(f"WebSocket request for incorrect path: {path}")
             writer.write(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n")
             await writer.drain()
             writer.close()
             return
-        
-        # CORS check
-        origin = headers.get('origin', '')
-        if self.allow_origins and '*' not in self.allow_origins and origin not in self.allow_origins:
-            logger.warning(f"WebSocket origin {origin} not allowed")
+
+        origin = headers.get("origin", "")
+        if self.allow_origins and "*" not in self.allow_origins and origin not in self.allow_origins:
             writer.write(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
             await writer.drain()
             writer.close()
             return
-        
-        # Perform handshake
-        ws_key = headers['sec-websocket-key']
+
+        # Build accept key
+        ws_key = headers["sec-websocket-key"]
         ws_accept = base64.b64encode(
             hashlib.sha1((ws_key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()
         ).decode()
-        
+
         response = (
             "HTTP/1.1 101 Switching Protocols\r\n"
             "Upgrade: websocket\r\n"
@@ -279,69 +347,67 @@ class AutoDetectServer(BaseServer):
             f"Sec-WebSocket-Accept: {ws_accept}\r\n"
             "\r\n"
         )
-        writer.write(response.encode('utf-8'))
+        writer.write(response.encode("utf-8"))
         await writer.drain()
-        
-        # Let websockets take over
-        sock = writer.get_extra_info('socket')
-        protocol = await websockets.basic_auth_protocol_factory(
-            process_request=None,
+
+        # let websockets take over
+        sock = writer.get_extra_info("socket")
+        loop = asyncio.get_running_loop()
+
+        # For websockets 15, we need a dummy server
+        class DummyWSServer:
+            def register(self, proto):
+                pass
+
+        dummy = DummyWSServer()
+        protocol = WebSocketServerProtocol(
+            None,
+            dummy,
             ping_interval=self.ping_interval,
             ping_timeout=self.ping_timeout,
-        )(sock, host=self.host)
-        
-        adapter = WebSocketAdapter(protocol, self.handler_class)
-        adapter.server = self
-        
+        )
+        transport, _ = await loop.connect_accepted_socket(lambda: protocol, sock)
+        protocol.connection_open()
+
+        # Now create an adapter that uses TelnetOverWebSocketHandler
+        adapter = TelnetOverWSAdapter(protocol)
         self.active_connections.add(adapter)
-        self.connections_by_protocol['websocket'].add(adapter)
-        
+        self.connections_by_protocol["websocket"].add(adapter)
+
         try:
             await adapter.handle_client()
         except Exception as e:
-            logger.error(f"Error handling WebSocket client {addr}: {e}")
+            logger.error(f"Error in WebSocket connection from {addr}: {e}")
         finally:
             self.active_connections.discard(adapter)
-            self.connections_by_protocol['websocket'].discard(adapter)
-    
-    async def send_global_message(self, message: str) -> None:
-        tasks = []
-        for handler in self.connections_by_protocol['telnet']:
-            try:
-                if hasattr(handler, 'send_line'):
-                    tasks.append(asyncio.create_task(handler.send_line(message)))
-            except Exception as e:
-                logger.error(f"Error sending msg to telnet: {e}")
-        for adapter in self.connections_by_protocol['websocket']:
-            try:
-                tasks.append(asyncio.create_task(adapter.send_line(message)))
-            except Exception as e:
-                logger.error(f"Error sending msg to websocket: {e}")
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-    
+            self.connections_by_protocol["websocket"].discard(adapter)
+
     async def shutdown(self) -> None:
         logger.info("Shutting down auto-detect server...")
         if self.server:
             self.server.close()
             await self.server.wait_closed()
         await super().shutdown()
-        logger.info("Auto-detect server has shut down.")
-    
+        logger.info("Auto-detect server shut down.")
+
     async def _force_close_connections(self) -> None:
-        for handler in list(self.connections_by_protocol['telnet']):
-            try:
-                if hasattr(handler, 'writer'):
-                    handler.writer.close()
-                self.active_connections.discard(handler)
-                self.connections_by_protocol['telnet'].discard(handler)
-            except Exception as e:
-                logger.error(f"Error force closing telnet connection: {e}")
-        
-        for adapter in list(self.connections_by_protocol['websocket']):
-            try:
-                await adapter.close()
-                self.active_connections.discard(adapter)
-                self.connections_by_protocol['websocket'].discard(adapter)
-            except Exception as e:
-                logger.error(f"Error force closing websocket connection: {e}")
+        # forcibly close leftover connections if needed
+        pass
+
+    async def send_global_message(self, message: str) -> None:
+        """
+        Broadcast a message to all Telnet or WebSocket connections.
+        This method is required by BaseServer, so we provide at least a stub.
+        """
+        # If you want an actual broadcast:
+        tasks = []
+        # Broadcast to telnet connections
+        for h in self.connections_by_protocol["telnet"]:
+            if hasattr(h, "send_line"):
+                tasks.append(asyncio.create_task(h.send_line(message)))
+        # Broadcast to WS connections (TelnetOverWSAdapter)
+        for a in self.connections_by_protocol["websocket"]:
+            if hasattr(a, "handler") and a.handler:
+                await a.handler.send_line(message)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)

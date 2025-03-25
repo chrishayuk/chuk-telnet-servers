@@ -11,7 +11,6 @@ import asyncio
 import logging
 from typing import Optional, Any
 
-# Create logger for this module
 logger = logging.getLogger('telnet-base')
 
 class BaseHandler:
@@ -28,8 +27,8 @@ class BaseHandler:
         Initialize the base handler with the given streams.
         
         Args:
-            reader: The stream reader for reading from the client
-            writer: The stream writer for writing to the client
+            reader: The stream reader for reading from the client.
+            writer: The stream writer for writing to the client.
         """
         self.reader = reader
         self.writer = writer
@@ -45,7 +44,7 @@ class BaseHandler:
         override this method to implement specific protocol handling.
         
         Raises:
-            NotImplementedError: If not overridden by a subclass
+            NotImplementedError: If not overridden by a subclass.
         """
         raise NotImplementedError("Subclasses must implement handle_client")
     
@@ -53,15 +52,35 @@ class BaseHandler:
         """
         Send raw data to the client.
         
+        This method ensures that if the underlying writer's write method returns a coroutine,
+        it is properly awaited. It also calls drain if available.
+        
         Args:
-            data: The raw data to send
+            data: The raw data to send.
             
         Raises:
-            Exception: If an error occurs while sending data
+            Exception: If an error occurs while sending data.
         """
         try:
-            self.writer.write(data)
-            await self.writer.drain()
+            # Check if writer.write is a coroutine function
+            if asyncio.iscoroutinefunction(self.writer.write):
+                await self.writer.write(data)
+            else:
+                result = self.writer.write(data)
+                # In some cases, write() might return a coroutine even if not defined as a function,
+                # so check the result as well.
+                if asyncio.iscoroutine(result):
+                    await result
+
+            # Attempt to drain if available. Some async writers (e.g. in websockets) may not have drain.
+            drain = getattr(self.writer, "drain", None)
+            if drain is not None:
+                if asyncio.iscoroutinefunction(drain):
+                    await drain()
+                else:
+                    result = drain()
+                    if asyncio.iscoroutine(result):
+                        await result
         except Exception as e:
             logger.error(f"Error sending raw data to {self.addr}: {e}")
             raise
@@ -71,25 +90,22 @@ class BaseHandler:
         Read raw data from the client with optional timeout.
         
         Args:
-            n: Maximum number of bytes to read (-1 for unlimited)
-            timeout: Maximum time to wait in seconds (None for no timeout)
+            n: Maximum number of bytes to read (-1 for unlimited).
+            timeout: Maximum time to wait in seconds (None for no timeout).
             
         Returns:
-            The bytes read from the client
+            The bytes read from the client.
             
         Raises:
-            asyncio.TimeoutError: If the timeout expires
-            Exception: If an error occurs while reading data
+            asyncio.TimeoutError: If the timeout expires.
+            Exception: If an error occurs while reading data.
         """
         try:
             if timeout is not None:
-                # Read with timeout
                 return await asyncio.wait_for(self.reader.read(n), timeout=timeout)
             else:
-                # Read without timeout
                 return await self.reader.read(n)
         except asyncio.TimeoutError:
-            # Let the caller handle timeout
             raise
         except Exception as e:
             logger.error(f"Error reading raw data from {self.addr}: {e}")
@@ -118,11 +134,11 @@ class BaseHandler:
         which provides access to transport-specific information.
         
         Args:
-            name: The name of the information to get
-            default: The default value to return if the information is not available
+            name: The name of the information to get.
+            default: The default value to return if the information is not available.
             
         Returns:
-            The requested information or the default value
+            The requested information or the default value.
         """
         return self.writer.get_extra_info(name, default)
     
@@ -152,7 +168,7 @@ class BaseHandler:
         errors that occur during client handling.
         
         Args:
-            exception: The exception that occurred
+            exception: The exception that occurred.
         """
         logger.error(f"Error handling client {self.addr}: {exception}")
     
@@ -161,6 +177,6 @@ class BaseHandler:
         Return a string representation of the handler.
         
         Returns:
-            A string representation of the handler
+            A string representation of the handler.
         """
         return f"{self.__class__.__name__}(addr={self.addr})"

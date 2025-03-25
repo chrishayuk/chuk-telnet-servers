@@ -7,6 +7,7 @@ Core telnet server implementation with connection management.
 This module provides the foundation for hosting telnet services
 with proper connection lifecycle management and graceful shutdown.
 """
+
 import asyncio
 import logging
 from typing import Dict, Any, Optional, Set, List, Type
@@ -14,6 +15,9 @@ from typing import Dict, Any, Optional, Set, List, Type
 # Import the protocol handler and base server
 from telnet_server.handlers.base_handler import BaseHandler
 from telnet_server.transports.base_server import BaseServer
+
+# Import Telnet constants (IAC, etc.) used for negotiation detection
+from telnet_server.protocols.telnet.constants import IAC
 
 # Configure logging
 logger = logging.getLogger('telnet-server')
@@ -71,31 +75,53 @@ class TelnetServer(BaseServer):
             raise
     
     async def handle_new_connection(self, reader: asyncio.StreamReader, 
-                                   writer: asyncio.StreamWriter) -> None:
+                                    writer: asyncio.StreamWriter) -> None:
         """
         Handle a new client connection.
         
         This method creates a handler instance for the new client,
         adds it to the active connections, and starts processing.
+        It first attempts to detect if Telnet negotiation is taking place.
+        If not, it falls back into a simplified text mode.
         
         Args:
             reader: The stream reader for the client
             writer: The stream writer for the client
         """
-        # Create handler
+        negotiation_mode = "telnet"  # default to full telnet mode
+        initial_data = b""
+        try:
+            # Attempt to read a few bytes within a short timeout (e.g. 1 second)
+            initial_data = await asyncio.wait_for(reader.read(10), timeout=1.0)
+        except asyncio.TimeoutError:
+            # No data received within timeout; assume simple mode
+            negotiation_mode = "simple"
+        else:
+            if not initial_data or initial_data[0] != IAC:
+                # Data does not start with the IAC byte, so negotiation likely won’t occur
+                negotiation_mode = "simple"
+        
+        logger.debug(f"Detected connection mode: {negotiation_mode}")
+        
+        # Create handler and store the initial data and mode.
         handler = self.handler_class(reader, writer)
         handler.server = self  # Set reference to server
+        # Attach the detected mode and any initial data (if you want to process it later)
+        handler.mode = negotiation_mode
+        handler.initial_data = initial_data
         
         # Add to active connections
         self.active_connections.add(handler)
         
         try:
-            # Handle client
+            # Delegate client handling to the handler's logic.
+            # For instance, if handler.mode == "simple", it may bypass full negotiation.
             await self.handle_client(handler)
         except Exception as e:
-            logger.error(f"Error handling client {handler.addr if hasattr(handler, 'addr') else 'unknown'}: {e}")
+            addr = getattr(handler, 'addr', 'unknown')
+            logger.error(f"Error handling client {addr}: {e}")
         finally:
-            # Clean up
+            # Clean up the connection
             try:
                 await self.cleanup_connection(handler)
                 writer.close()
