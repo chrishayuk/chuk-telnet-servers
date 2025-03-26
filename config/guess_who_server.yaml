@@ -24,7 +24,7 @@ servers:
     host: "0.0.0.0"
     port: 8025
     transport: "websocket"
-    ws_path: "/guess-who"
+    ws_path: "/ws"
     handler_class: "sample_servers.guess_who_server:GuessWhoHandler"
     use_ssl: false
     allow_origins:
@@ -34,12 +34,15 @@ servers:
     max_connections: 50
     connection_timeout: 600
     welcome_message: "Welcome to Guess Who (WebSocket)! Can you guess the mystery person?"
-  
+    # Monitoring configuration
+    enable_monitoring: true
+    monitor_path: "/monitor"
+
   ws_telnet:
     host: "0.0.0.0"
     port: 8026
     transport: "ws_telnet"         # WebSocket over Telnet: performs Telnet negotiation over the WS transport
-    ws_path: "/ws_telnet"
+    ws_path: "/ws"
     handler_class: "sample_servers.guess_who_server:GuessWhoHandler"
     use_ssl: false
     ssl_cert: ""
@@ -51,3 +54,6 @@ servers:
     max_connections: 100
     connection_timeout: 300
     welcome_message: "Welcome to Guess Who (WebSocket)! Can you guess the mystery person?"
+    # Monitoring configuration
+    enable_monitoring: true
+    monitor_path: "/monitor"

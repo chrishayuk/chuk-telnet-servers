@@ -42,7 +42,7 @@ servers:
     host: "0.0.0.0"
     port: 8026
     transport: "ws_telnet"         # WebSocket over Telnet: performs Telnet negotiation over the WS transport
-    ws_path: "/ws_telnet"
+    ws_path: "/ws"
     handler_class: "sample_servers.stock_server:StockFeedHandler"
     use_ssl: false
     ssl_cert: ""
