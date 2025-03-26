@@ -24,7 +24,7 @@ servers:
     host: "0.0.0.0"
     port: 8025
     transport: "websocket"
-    ws_path: "/stocks"
+    ws_path: "/ws"
     handler_class: "sample_servers.stock_server:StockFeedHandler"
     use_ssl: false
     allow_origins:
@@ -34,13 +34,16 @@ servers:
     max_connections: 100
     connection_timeout: 300
     welcome_message: "Welcome to the Stock Feed Server (WebSocket)! Get real-time stock updates."
+    # Monitoring configuration
+    enable_monitoring: true
+    monitor_path: "/monitor"
   
   ws_telnet:
     host: "0.0.0.0"
     port: 8026
     transport: "ws_telnet"         # WebSocket over Telnet: performs Telnet negotiation over the WS transport
     ws_path: "/ws_telnet"
-    handler_class: "sample_servers.echo_server:EchoWebSocketTelnetHandler"
+    handler_class: "sample_servers.stock_server:StockFeedHandler"
     use_ssl: false
     ssl_cert: ""
     ssl_key: ""
@@ -51,3 +54,6 @@ servers:
     max_connections: 100
     connection_timeout: 300
     welcome_message: "Welcome to the Stock Feed Server (WebSocket)! Get real-time stock updates."
+    # Monitoring configuration
+    enable_monitoring: true
+    monitor_path: "/monitor"
