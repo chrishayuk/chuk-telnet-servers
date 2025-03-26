@@ -4,7 +4,7 @@
 servers:
   telnet:
     host: "0.0.0.0"
-    port: 8043
+    port: 8023
     transport: "telnet"
     handler_class: "sample_servers.guess_who_server:GuessWhoHandler"
     max_connections: 50
@@ -13,7 +13,7 @@ servers:
 
   tcp:
     host: "0.0.0.0"
-    port: 8044
+    port: 8024
     transport: "tcp"
     handler_class: "sample_servers.guess_who_server:GuessWhoHandler"
     max_connections: 50
@@ -22,7 +22,7 @@ servers:
 
   websocket:
     host: "0.0.0.0"
-    port: 8045
+    port: 8025
     transport: "websocket"
     ws_path: "/guess-who"
     handler_class: "sample_servers.guess_who_server:GuessWhoHandler"
@@ -33,4 +33,21 @@ servers:
     ping_timeout: 10
     max_connections: 50
     connection_timeout: 600
+    welcome_message: "Welcome to Guess Who (WebSocket)! Can you guess the mystery person?"
+  
+  ws_telnet:
+    host: "0.0.0.0"
+    port: 8026
+    transport: "ws_telnet"         # WebSocket over Telnet: performs Telnet negotiation over the WS transport
+    ws_path: "/ws_telnet"
+    handler_class: "sample_servers.guess_who_server:GuessWhoHandler"
+    use_ssl: false
+    ssl_cert: ""
+    ssl_key: ""
+    allow_origins:
+      - "*"
+    ping_interval: 30
+    ping_timeout: 10
+    max_connections: 100
+    connection_timeout: 300
     welcome_message: "Welcome to Guess Who (WebSocket)! Can you guess the mystery person?"
