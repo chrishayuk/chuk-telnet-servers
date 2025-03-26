@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 # telnet_server/server_config.py
 """
-Server Configuration Handler
+Server Configuration Handler with Monitoring Support
 
 This module provides utilities for loading, validating, and applying 
-server configuration from YAML files or dictionaries. It ensures all required
-parameters are present and provides factory methods for creating server instances.
+server configuration from YAML files or dictionaries, including session monitoring options.
 """
 
 import os
@@ -93,6 +92,11 @@ class ServerConfig:
             if config.get('use_ssl', False):
                 if 'ssl_cert' not in config or 'ssl_key' not in config:
                     raise ValueError("SSL enabled but missing ssl_cert or ssl_key")
+            
+            # Monitoring validations
+            if config.get('enable_monitoring', False):
+                # Optional checks for monitoring configuration
+                pass
     
     @staticmethod
     def create_server_from_config(config: Dict[str, Any], handler_class: Type[BaseHandler]) -> BaseServer:
@@ -131,6 +135,10 @@ class ServerConfig:
                 ssl_cert = config.get('ssl_cert')
                 ssl_key = config.get('ssl_key')
             
+            # Check if monitoring is enabled
+            enable_monitoring = config.get('enable_monitoring', False)
+            monitor_path = config.get('monitor_path', '/monitor')
+            
             server = PlainWebSocketServer(
                 host=host,
                 port=port,
@@ -140,7 +148,9 @@ class ServerConfig:
                 ping_timeout=ping_timeout,
                 allow_origins=allow_origins,
                 ssl_cert=ssl_cert,
-                ssl_key=ssl_key
+                ssl_key=ssl_key,
+                enable_monitoring=enable_monitoring,
+                monitor_path=monitor_path
             )
         elif transport == WS_TELNET_TRANSPORT:
             # Create a WebSocket Telnet server
@@ -156,6 +166,10 @@ class ServerConfig:
                 ssl_cert = config.get('ssl_cert')
                 ssl_key = config.get('ssl_key')
             
+            # Check if monitoring is enabled
+            enable_monitoring = config.get('enable_monitoring', False)
+            monitor_path = config.get('monitor_path', '/monitor')
+            
             server = WSTelnetServer(
                 host=host,
                 port=port,
@@ -165,7 +179,9 @@ class ServerConfig:
                 ping_timeout=ping_timeout,
                 allow_origins=allow_origins,
                 ssl_cert=ssl_cert,
-                ssl_key=ssl_key
+                ssl_key=ssl_key,
+                enable_monitoring=enable_monitoring,
+                monitor_path=monitor_path
             )
         else:
             raise ValueError(f"Unsupported transport type: {transport}")
@@ -174,7 +190,8 @@ class ServerConfig:
         for key, value in config.items():
             if key not in ['transport', 'handler_class', 'host', 'port', 
                           'ws_path', 'ping_interval', 'ping_timeout', 
-                          'allow_origins', 'use_ssl', 'ssl_cert', 'ssl_key']:
+                          'allow_origins', 'use_ssl', 'ssl_cert', 'ssl_key',
+                          'enable_monitoring', 'monitor_path']:
                 if hasattr(server, key):
                     setattr(server, key, value)
                 else:

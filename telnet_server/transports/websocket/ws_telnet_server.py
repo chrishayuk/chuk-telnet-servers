@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 # telnet_server/transports/websocket/ws_telnet_server.py
 """
-WebSocket Telnet Server
+WebSocket Telnet Server with Session Monitoring
 
 This server accepts WebSocket connections and performs Telnet negotiation
 over the WebSocket transport. It adapts the WebSocket connection to behave
-like a Telnet connection.
+like a Telnet connection and supports monitoring sessions if enabled.
 """
 
 import asyncio
 import logging
+import uuid
 from typing import Type, List, Optional
 
 import websockets
@@ -19,12 +20,14 @@ from websockets.exceptions import ConnectionClosed
 from telnet_server.handlers.base_handler import BaseHandler
 from telnet_server.transports.websocket.base_ws_server import BaseWebSocketServer
 from telnet_server.transports.websocket.ws_adapter import WebSocketAdapter
+from telnet_server.transports.websocket.ws_monitorable_adapter import MonitorableWebSocketAdapter
 
 logger = logging.getLogger('ws-telnet-server')
 
 class WSTelnetServer(BaseWebSocketServer):
     """
     WebSocket Telnet server that performs Telnet negotiation over WebSocket.
+    Supports monitoring sessions through a separate endpoint if enabled.
     """
     def __init__(
         self,
@@ -36,7 +39,9 @@ class WSTelnetServer(BaseWebSocketServer):
         ping_timeout: int = 10,
         allow_origins: Optional[List[str]] = None,
         ssl_cert: Optional[str] = None,
-        ssl_key: Optional[str] = None
+        ssl_key: Optional[str] = None,
+        enable_monitoring: bool = False,
+        monitor_path: str = '/monitor'
     ):
         """
         Initialize the WebSocket Telnet server.
@@ -51,6 +56,8 @@ class WSTelnetServer(BaseWebSocketServer):
             allow_origins: List of allowed origins for CORS checks (default: ['*']).
             ssl_cert: Path to SSL certificate (optional).
             ssl_key: Path to SSL key (optional).
+            enable_monitoring: Whether to enable session monitoring.
+            monitor_path: Path for the monitoring WebSocket endpoint.
         """
         super().__init__(
             host=host, 
@@ -60,7 +67,9 @@ class WSTelnetServer(BaseWebSocketServer):
             ping_timeout=ping_timeout,
             allow_origins=allow_origins,
             ssl_cert=ssl_cert,
-            ssl_key=ssl_key
+            ssl_key=ssl_key,
+            enable_monitoring=enable_monitoring,
+            monitor_path=monitor_path
         )
         self.path = path
         self.transport = "ws_telnet"
@@ -72,6 +81,17 @@ class WSTelnetServer(BaseWebSocketServer):
         This checks the requested path, optionally performs CORS checks,
         and then uses a WebSocketAdapter to invoke the Telnet handler logic.
         """
+        # Check if this is a monitoring connection
+        if self.enable_monitoring and self.session_monitor:
+            try:
+                request_path = websocket.request.path
+                if self.session_monitor.is_monitor_path(request_path):
+                    logger.info(f"Monitoring viewer connected: {websocket.remote_address}")
+                    await self.session_monitor.handle_viewer_connection(websocket)
+                    return
+            except AttributeError:
+                logger.error("Cannot access websocket.request.path")
+        
         # Reject connection if we're at max connections
         if self.max_connections and len(self.active_connections) >= self.max_connections:
             logger.warning(f"Maximum connections ({self.max_connections}) reached, rejecting WebSocket connection")
@@ -106,8 +126,31 @@ class WSTelnetServer(BaseWebSocketServer):
             await websocket.close(code=1011, reason="Internal server error")
             return
 
-        # Create a WebSocket adapter that defers to the Telnet handler.
-        adapter = WebSocketAdapter(websocket, self.handler_class)
+        # Create appropriate adapter (monitorable if monitoring is enabled)
+        if self.enable_monitoring and self.session_monitor:
+            # Import the interceptor here to avoid circular imports
+            from telnet_server.transports.websocket.ws_interceptor import WebSocketInterceptor
+            
+            # Generate session ID
+            session_id = str(uuid.uuid4())
+            
+            # Create interceptor for protocol-level monitoring
+            interceptor = WebSocketInterceptor(
+                websocket=websocket,
+                session_id=session_id,
+                monitor=self.session_monitor
+            )
+            
+            # Create the adapter with the interceptor
+            adapter = MonitorableWebSocketAdapter(interceptor, self.handler_class)
+            adapter.session_id = session_id  # Use the same session ID
+            adapter.monitor = self.session_monitor
+            adapter.is_monitored = True
+            
+            logger.debug(f"Created monitorable Telnet adapter with session ID: {adapter.session_id}")
+        else:
+            adapter = WebSocketAdapter(websocket, self.handler_class)
+            
         adapter.server = self
         # In ws_telnet mode, do NOT set mode to 'simple'; let Telnet negotiation proceed.
         adapter.mode = "telnet"
@@ -132,7 +175,7 @@ class WSTelnetServer(BaseWebSocketServer):
                 # The session was explicitly ended by the handler
                 logger.debug(f"WS Telnet: Session ended for {adapter.addr}")
                 # Ensure the WebSocket is properly closed
-                if not websocket.closed:
+                if not getattr(websocket, 'closed', False):
                     await websocket.close(1000, "Session ended")
                     
         except ConnectionClosed as e:

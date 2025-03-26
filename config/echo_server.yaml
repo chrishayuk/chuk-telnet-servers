@@ -33,13 +33,16 @@ servers:
     max_connections: 100
     connection_timeout: 300
     welcome_message: "Welcome to the WebSocket Server! Text messages will be handled over WS."
+    # Monitoring configuration
+    enable_monitoring: true
+    monitor_path: "/monitor"
 
   ws_telnet:
     host: "0.0.0.0"
     port: 8026
     transport: "ws_telnet"         # WebSocket over Telnet: performs Telnet negotiation over the WS transport
     ws_path: "/ws_telnet"
-    handler_class: "sample_servers.echo_server:EchoWebSocketTelnetHandler"
+    handler_class: "sample_servers.echo_server:EchoTelnetHandler"
     use_ssl: false
     ssl_cert: ""
     ssl_key: ""
@@ -50,4 +53,6 @@ servers:
     max_connections: 100
     connection_timeout: 300
     welcome_message: "Welcome to the WebSocket Telnet Server! Negotiation will be attempted over WebSocket."
-    
+    # Monitoring configuration
+    enable_monitoring: true
+    monitor_path: "/monitor"
