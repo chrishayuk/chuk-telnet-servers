@@ -322,6 +322,31 @@ class StockFeedHandler(TelnetHandler):
             await self.send_line(line)
         
         await self.show_prompt()
+    
+    async def process_line(self, line: str) -> bool:
+        """
+        Override process_line to properly handle commands in both simple and telnet modes.
+        
+        This ensures the stock feed handler works consistently across all transports.
+        
+        Args:
+            line: The line to process
+            
+        Returns:
+            True to continue processing, False to terminate the connection
+        """
+        logger.debug(f"StockFeedHandler process_line => {line!r}")
+        
+        # Check for exit commands first
+        if line.lower() in ['quit', 'exit', 'q']:
+            await self.end_session("Goodbye!")
+            return False
+        
+        # Process the command through on_command_submitted
+        await self.on_command_submitted(line)
+        
+        # Continue processing
+        return True
 
 
 async def shutdown_handlers():

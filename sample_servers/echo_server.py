@@ -115,6 +115,32 @@ class EchoTelnetHandler(TelnetHandler):
         
         await self.show_prompt()
 
+    async def process_line(self, line: str) -> bool:
+        """
+        Override process_line for consistent behavior across all transport modes.
+        
+        This ensures that the echo server works the same way in both telnet and websocket modes.
+        
+        Args:
+            line: The line to process
+            
+        Returns:
+            True to continue processing, False to terminate the connection
+        """
+        logger.debug(f"EchoTelnetHandler process_line => {line!r}")
+        
+        # Check for exit commands first
+        if line.lower() in ['quit', 'exit', 'q']:
+            await self.send_line("Goodbye!")
+            await self.end_session()
+            return False
+        
+        # Process the command through on_command_submitted
+        await self.on_command_submitted(line)
+        
+        # Continue processing
+        return True
+
 # Standalone server functionality if this module is executed directly
 async def main():
     """

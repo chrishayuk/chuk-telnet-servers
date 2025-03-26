@@ -349,6 +349,32 @@ class GuessWhoHandler(TelnetHandler):
         await self.send_line("  help          - View all commands & questions")
         await self.send_line("  quit          - Disconnect")
         await self.send_line("=============================================")
+    
+    async def process_line(self, line: str) -> bool:
+        """
+        Override process_line to properly handle commands in both simple and telnet modes.
+        
+        This ensures the game works consistently across all transports.
+        
+        Args:
+            line: The line to process
+            
+        Returns:
+            True to continue processing, False to terminate the connection
+        """
+        logger.debug(f"GuessWhoHandler process_line => {line!r}")
+        
+        # Check for exit commands first
+        if line.lower() in ['quit', 'exit', 'q']:
+            await self.send_line("Thanks for playing Guess Who! Goodbye!")
+            await self.end_session()
+            return False
+        
+        # Process the command through on_command_submitted
+        await self.on_command_submitted(line)
+        
+        # Continue processing
+        return True
 
 async def main():
     """Main entry point for the Guess Who server."""
