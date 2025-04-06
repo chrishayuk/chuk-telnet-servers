@@ -1,0 +1,57 @@
+[project]
+name = "chuk-jump-server"
+version = "0.1.0"
+description = "A multi-world telnet server providing an interactive jumping point between different server realms"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+    {name = "Chris Hay", email = "chris@example.com"}
+]
+keywords = ["telnet", "server", "multi-world", "networking"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: Server Implementations",
+    "Topic :: Software Development :: Libraries :: Python Modules"
+]
+
+dependencies = [
+    "asyncio",
+    "chuk-protocol-server>=0.1.10",
+    "logging",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "mypy",
+    "black",
+    "isort"
+]
+
+[project.scripts]
+jump-server = "chuk_jump_server.server:main"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["chuk_jump_server"]
+
+[tool.black]
+line-length = 100
+target-version = ['py311']
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
